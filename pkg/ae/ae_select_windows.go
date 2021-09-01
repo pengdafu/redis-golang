@@ -1,15 +1,12 @@
 package ae
 
-import "syscall"
-
 type apiState struct {
 
 }
 
+// todo windows select ???
 func apiCreate(el *eventLoop) error {
 	state := new(apiState)
-
-	f, _ := syscall.Socket()
 
 
 	el.ApiData = state
