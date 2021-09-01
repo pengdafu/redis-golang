@@ -73,3 +73,7 @@ func CreateEventLoop(setsize int) (*eventLoop, error) {
 
 	return el, nil
 }
+
+func (el *eventLoop) Main() {
+
+}
