@@ -1,5 +1,7 @@
 package ae
 
+import pkgTime "github.com/pengdafu/redis-golang/pkg/time"
+
 const (
 	NONE = iota << 1
 	READABLE
@@ -7,13 +9,27 @@ const (
 	BARRIER
 )
 
-type aeBeforeSleepProc func(eventLoop *eventLoop)
-type eventLoop struct {
+const (
+	FILE_EVENTS = 1 << iota
+	TIME_EVENTS
+	DONT_WAIT
+	CALL_BEFORE_SLEEP
+	CALL_AFTER_SLEEP
+	ALL_EVENTS = FILE_EVENTS | TIME_EVENTS
+)
+
+const (
+	OK  = 0
+	ERR = -1
+)
+
+type aeBeforeSleepProc func(eventLoop *EventLoop)
+type EventLoop struct {
 	MaxFd           int // 多路复用io一次最多返回多少个事件的fd
 	SetSize         int
-	TimeEventNextId uint64
-	Events          []*fileEvent
-	Fired           []*firedEvent
+	TimeEventNextId int64
+	Events          []fileEvent
+	Fired           []firedEvent
 	TimeEventHead   *timeEvent
 	Stop            int
 	ApiData         interface{} // todo
@@ -22,7 +38,7 @@ type eventLoop struct {
 	Flags           int
 }
 
-type aeFileProc func(eventLoop *eventLoop, fd int, clientData interface{}, mask int)
+type aeFileProc func(eventLoop *EventLoop, fd int, clientData interface{}, mask int)
 type fileEvent struct {
 	Mask       int // AE_(WRITEABLE|READABLE|BARRIER) 中的一种
 	RFileProc  aeFileProc
@@ -31,15 +47,15 @@ type fileEvent struct {
 }
 
 type firedEvent struct {
-	Fd   int
+	Fd   uint64
 	Mask int
 }
 
-type aeTimeProc func(eventLoop *eventLoop, id uint64, clientData interface{})
-type aeEventFinalizerProc func(eventLoop *eventLoop, clientData interface{})
+type aeTimeProc func(eventLoop *EventLoop, id uint64, clientData interface{}) int
+type aeEventFinalizerProc func(eventLoop *EventLoop, clientData interface{})
 type timeEvent struct {
-	Id            uint64
-	MonoTime      uint64 // timestamp
+	Id            int64
+	When          int64 // timestamp
 	TimeProc      aeTimeProc
 	FinalizerProc aeEventFinalizerProc
 	ClientData    interface{}
@@ -48,11 +64,11 @@ type timeEvent struct {
 	RefCount      int // 在递归时间事件被调用时，refCount为了防止时间器事件被释放
 }
 
-func CreateEventLoop(setsize int) (*eventLoop, error) {
-	el := new(eventLoop)
+func CreateEventLoop(setsize int) (*EventLoop, error) {
+	el := new(EventLoop)
 
-	el.Events = make([]*fileEvent, 0, setsize)
-	el.Fired = make([]*firedEvent, 0, setsize)
+	el.Events = make([]fileEvent, 0, setsize)
+	el.Fired = make([]firedEvent, setsize, setsize)
 	el.SetSize = setsize
 	el.TimeEventHead = nil
 	el.TimeEventNextId = 0
@@ -74,6 +90,28 @@ func CreateEventLoop(setsize int) (*eventLoop, error) {
 	return el, nil
 }
 
-func (el *eventLoop) Main() {
+func (el *EventLoop) ApiPoll(tvp *pkgTime.TimeVal) int {
+	return apiPoll(el, tvp)
+}
 
+func (el *EventLoop) CreateTimeEvent(milliseconds int64, proc aeTimeProc, clientData interface{}, finalizerProc aeEventFinalizerProc) int64 {
+	id := el.TimeEventNextId
+	el.TimeEventNextId++
+
+	te := new(timeEvent)
+	te.Id = id
+	te.When = pkgTime.GetMonotonicUs() + milliseconds*1000
+	te.TimeProc = proc
+	te.FinalizerProc = finalizerProc
+	te.ClientData = clientData
+	te.Prev = nil
+	te.Next = el.TimeEventHead
+	te.RefCount = 0
+
+	if te.Next != nil {
+		te.Next.Prev = te
+	}
+	el.TimeEventHead = te
+
+	return id
 }

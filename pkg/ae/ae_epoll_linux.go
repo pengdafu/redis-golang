@@ -7,7 +7,7 @@ type apiState struct {
 	Events []*syscall.EpollEvent
 }
 
-func apiCreate(el *eventLoop) error {
+func apiCreate(el *EventLoop) error {
 	state := new(apiState)
 
 	state.Events = make([]*syscall.EpollEvent, 0, el.SetSize)

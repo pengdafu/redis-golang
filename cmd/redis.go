@@ -1,14 +1,12 @@
 package main
 
 import (
-	ae2 "github.com/pengdafu/redis-golang/pkg/ae"
-	"log"
+	"github.com/pengdafu/redis-golang/server"
 )
 
 func main() {
-	ae, err := ae2.CreateEventLoop(1024)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	ae.Main()
+	redisServer := server.New()
+
+	redisServer.Init()
+	redisServer.Start()
 }
