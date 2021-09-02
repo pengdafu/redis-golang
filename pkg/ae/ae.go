@@ -1,6 +1,9 @@
 package ae
 
-import pkgTime "github.com/pengdafu/redis-golang/pkg/time"
+import (
+	"fmt"
+	pkgTime "github.com/pengdafu/redis-golang/pkg/time"
+)
 
 const (
 	NONE = iota << 1
@@ -23,8 +26,8 @@ const (
 	ERR = -1
 )
 
-type aeBeforeSleepProc func(eventLoop *EventLoop)
-type EventLoop struct {
+type AeBeforeSleepProc func(eventLoop *AeEventLoop)
+type AeEventLoop struct {
 	MaxFd           int // 多路复用io一次最多返回多少个事件的fd
 	SetSize         int
 	TimeEventNextId int64
@@ -33,16 +36,16 @@ type EventLoop struct {
 	TimeEventHead   *timeEvent
 	Stop            int
 	ApiData         interface{} // todo
-	BeforeSleep     aeBeforeSleepProc
-	AfterSleep      aeBeforeSleepProc
+	BeforeSleep     AeBeforeSleepProc
+	AfterSleep      AeBeforeSleepProc
 	Flags           int
 }
 
-type aeFileProc func(eventLoop *EventLoop, fd int, clientData interface{}, mask int)
+type AeFileProc func(fd int, clientData interface{}, mask int)
 type fileEvent struct {
 	Mask       int // AE_(WRITEABLE|READABLE|BARRIER) 中的一种
-	RFileProc  aeFileProc
-	WFileProc  aeFileProc
+	RFileProc  AeFileProc
+	WFileProc  AeFileProc
 	ClientData interface{}
 }
 
@@ -51,12 +54,12 @@ type firedEvent struct {
 	Mask int
 }
 
-type aeTimeProc func(eventLoop *EventLoop, id uint64, clientData interface{}) int
-type aeEventFinalizerProc func(eventLoop *EventLoop, clientData interface{})
+type AeTimeProc func(eventLoop *AeEventLoop, id uint64, clientData interface{}) int
+type aeEventFinalizerProc func(eventLoop *AeEventLoop, clientData interface{})
 type timeEvent struct {
 	Id            int64
 	When          int64 // timestamp
-	TimeProc      aeTimeProc
+	TimeProc      AeTimeProc
 	FinalizerProc aeEventFinalizerProc
 	ClientData    interface{}
 	Prev          *timeEvent
@@ -64,10 +67,10 @@ type timeEvent struct {
 	RefCount      int // 在递归时间事件被调用时，refCount为了防止时间器事件被释放
 }
 
-func CreateEventLoop(setsize int) (*EventLoop, error) {
-	el := new(EventLoop)
+func AeCreateEventLoop(setsize int) (*AeEventLoop, error) {
+	el := new(AeEventLoop)
 
-	el.Events = make([]fileEvent, 0, setsize)
+	el.Events = make([]fileEvent, setsize, setsize)
 	el.Fired = make([]firedEvent, setsize, setsize)
 	el.SetSize = setsize
 	el.TimeEventHead = nil
@@ -90,11 +93,11 @@ func CreateEventLoop(setsize int) (*EventLoop, error) {
 	return el, nil
 }
 
-func (el *EventLoop) ApiPoll(tvp *pkgTime.TimeVal) int {
+func (el *AeEventLoop) AeApiPoll(tvp *pkgTime.TimeVal) int {
 	return apiPoll(el, tvp)
 }
 
-func (el *EventLoop) CreateTimeEvent(milliseconds int64, proc aeTimeProc, clientData interface{}, finalizerProc aeEventFinalizerProc) int64 {
+func (el *AeEventLoop) AeCreateTimeEvent(milliseconds int64, proc AeTimeProc, clientData interface{}, finalizerProc aeEventFinalizerProc) int64 {
 	id := el.TimeEventNextId
 	el.TimeEventNextId++
 
@@ -114,4 +117,54 @@ func (el *EventLoop) CreateTimeEvent(milliseconds int64, proc aeTimeProc, client
 	el.TimeEventHead = te
 
 	return id
+}
+
+func (el *AeEventLoop) AeDeleteFileEvent(fd, mask int) {
+	if fd >= el.SetSize {
+		return
+	}
+
+	fe := el.Events[fd]
+	if fe.Mask == NONE {
+		return
+	}
+
+	if mask&WRITEABLE != 0 {
+		mask |= BARRIER
+	}
+
+	apiDelEvent(el, fd, mask)
+	fe.Mask = fe.Mask & (^mask)
+	if fd == el.MaxFd && fe.Mask == NONE {
+		for i := el.MaxFd - 1; i >= 0; i-- {
+			if el.Events[i].Mask != NONE {
+				el.MaxFd = i
+				return
+			}
+		}
+	}
+}
+
+func (el *AeEventLoop) AeCreateFileEvent(fd, mask int, proc AeFileProc, clientData interface{}) error {
+	if fd >= el.SetSize {
+		return fmt.Errorf("fd out of range: %d", fd)
+	}
+
+	fe := &el.Events[fd]
+	if err := apiAddEvent(el, fd, mask); err != nil {
+		return fmt.Errorf("apiAddEvent err: %v", err)
+	}
+
+	fe.Mask |= mask
+	if mask&WRITEABLE != 0 {
+		fe.WFileProc = proc
+	}
+	if mask&READABLE != 0 {
+		fe.RFileProc = proc
+	}
+	fe.ClientData = clientData
+	if fd > el.MaxFd {
+		el.MaxFd = fd
+	}
+	return nil
 }

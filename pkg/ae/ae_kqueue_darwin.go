@@ -1,6 +1,7 @@
 package ae
 
 import (
+	"github.com/pengdafu/redis-golang/pkg/net"
 	pkgTime "github.com/pengdafu/redis-golang/pkg/time"
 	"syscall"
 	"time"
@@ -11,7 +12,7 @@ type apiState struct {
 	Events []syscall.Kevent_t
 }
 
-func apiCreate(el *EventLoop) error {
+func apiCreate(el *AeEventLoop) error {
 	state := new(apiState)
 
 	state.Events = make([]syscall.Kevent_t, 0, el.SetSize)
@@ -22,13 +23,13 @@ func apiCreate(el *EventLoop) error {
 	}
 	state.KqFd = kqfd
 
-	_ = cloexec(kqfd)
+	_ = net.AnetCloexec(kqfd)
 	el.ApiData = state
 
 	return nil
 }
 
-func apiPoll(el *EventLoop, tvp *pkgTime.TimeVal) (numevents int) {
+func apiPoll(el *AeEventLoop, tvp *pkgTime.TimeVal) (numevents int) {
 	state := el.ApiData.(*apiState)
 
 	if tvp == nil {
@@ -65,4 +66,12 @@ func apiPoll(el *EventLoop, tvp *pkgTime.TimeVal) (numevents int) {
 		}
 	}
 	return
+}
+
+func apiDelEvent(el *AeEventLoop, fd, mask int) {
+
+}
+
+func apiAddEvent(el *AeEventLoop, fd, mask int) error {
+	return nil
 }

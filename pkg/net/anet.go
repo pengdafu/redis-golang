@@ -1,0 +1,113 @@
+package net
+
+import (
+	"errors"
+	"fmt"
+	"net"
+	"syscall"
+)
+
+func AnetCloexec(fd int) (err error) {
+	var r, flags int
+	for {
+		_, _, r := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFD, 0)
+		if r == -1 && r == syscall.EINTR {
+			continue
+		}
+		break
+	}
+
+	if r == -1 || r&syscall.FD_CLOEXEC != 0 {
+		return fmt.Errorf("fcntl get errno: %v", r)
+	}
+
+	flags = r & syscall.FD_CLOEXEC
+
+	for {
+		_, _, r := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_SETFD, uintptr(flags))
+		if r == -1 && r == syscall.EINTR {
+			continue
+		}
+		break
+	}
+	if r != 0 {
+		return fmt.Errorf("fcntl get errno: %v", r)
+	}
+	return nil
+}
+
+func AnetTcpServer(port int, addr string, backlog int) (int, error) {
+	return _anetTcpServer(port, addr, syscall.AF_INET, backlog)
+}
+
+func AnetTcp6Server(port int, addr string, backlog int) (int, error) {
+	return _anetTcpServer(port, addr, syscall.AF_INET6, backlog)
+}
+
+func _anetTcpServer(port int, addr string, af, backlog int) (s int, err error) {
+	s, err = syscall.Socket(af, syscall.O_NONBLOCK|syscall.SOCK_STREAM, 0)
+	if err != nil {
+		return
+	}
+	var socketAddr syscall.Sockaddr
+	if af == syscall.AF_INET6 {
+		tmp := &syscall.SockaddrInet6{
+			Port: port,
+		}
+		copy(tmp.Addr[:], net.ParseIP(addr).To16())
+		socketAddr = tmp
+	} else {
+		tmp := &syscall.SockaddrInet4{
+			Port: port,
+		}
+		copy(tmp.Addr[:], net.ParseIP(addr).To4())
+		socketAddr = tmp
+	}
+
+	if err := anetListen(s, socketAddr, backlog); err != nil {
+		return 0, err
+	}
+	return
+}
+
+func anetListen(s int, addr syscall.Sockaddr, backlog int) error {
+	if err := syscall.Bind(s, addr); err != nil {
+		syscall.Close(s)
+		return err
+	}
+
+	if err := syscall.Listen(s, backlog); err != nil {
+		syscall.Close(s)
+		return err
+	}
+	return nil
+}
+
+func AnetNonBlock(fd int) error {
+	return anetSetBlock(fd, true)
+}
+
+func anetSetBlock(fd int, nonBlock bool) error {
+	_, _, flags := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFL, 0)
+	if flags == -1 {
+		return fmt.Errorf("fcntl(F_GETFL) err: %d", flags)
+	}
+
+	if (flags&syscall.O_NONBLOCK != 0) == nonBlock {
+		return nil
+	}
+
+	if nonBlock {
+		flags |= syscall.O_NONBLOCK
+	} else {
+		flags &= ^syscall.O_NONBLOCK
+	}
+
+	_, _, flags = syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_SETFL, uintptr(flags))
+
+	if flags == -1 {
+		return errors.New("fcntl(F_SETFL) err")
+	}
+
+	return nil
+}

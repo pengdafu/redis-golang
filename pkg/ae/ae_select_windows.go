@@ -5,7 +5,7 @@ type apiState struct {
 }
 
 // todo windows select ???
-func apiCreate(el *EventLoop) error {
+func apiCreate(el *AeEventLoop) error {
 	state := new(apiState)
 
 

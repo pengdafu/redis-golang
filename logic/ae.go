@@ -6,14 +6,14 @@ import (
 	"time"
 )
 
-func AeMain(el *ae.EventLoop) {
+func AeMain(el *ae.AeEventLoop) {
 	el.Stop = 0
 	for el.Stop == 0 {
 		AeProcessEvent(el, ae.ALL_EVENTS|ae.CALL_BEFORE_SLEEP|ae.CALL_AFTER_SLEEP)
 	}
 }
 
-func AeProcessEvent(el *ae.EventLoop, flags int) (processed int) {
+func AeProcessEvent(el *ae.AeEventLoop, flags int) (processed int) {
 	var numevents int
 
 	// 没有时间事件和文件(IO)事件，什么也不处理
@@ -49,7 +49,7 @@ func AeProcessEvent(el *ae.EventLoop, flags int) (processed int) {
 			el.BeforeSleep(el)
 		}
 
-		numevents = el.ApiPoll(timeVal)
+		numevents = el.AeApiPoll(timeVal)
 		for i := 0; i < numevents; i++ {
 
 		}
@@ -62,7 +62,7 @@ func AeProcessEvent(el *ae.EventLoop, flags int) (processed int) {
 	return processed
 }
 
-func processTimeEvents(el *ae.EventLoop) int {
+func processTimeEvents(el *ae.AeEventLoop) int {
 	return 0
 }
 
@@ -72,7 +72,7 @@ func processTimeEvents(el *ae.EventLoop) int {
 // 可能的优化点(Redis 暂时还不需要，但是...):
 //  1.插入事件的时候就排序，这样最近的时间事件就是head，这样虽然会更好，但是插入和删除变成了O(N)
 // 	2.使用跳表，这样获取变成了O(1)并且插入是O(log(N))
-func msUntilEarliestTimer(el *ae.EventLoop) int64 {
+func msUntilEarliestTimer(el *ae.AeEventLoop) int64 {
 	if el.TimeEventHead == nil {
 		return -1
 	}
