@@ -5,7 +5,7 @@ import (
 )
 
 const (
-	AE_NONE     = 0
+	AE_NONE      = 0
 	AE_READABLE  = 1
 	AE_WRITEABLE = 2
 	AE_BARRIER   = 4
@@ -81,7 +81,7 @@ func AeCreateEventLoop(setsize int) (*AeEventLoop, error) {
 	el.Flags = 0
 
 	// 创建多路复用
-	if err := apiCreate(el); err != nil {
+	if err := aeApiCreate(el); err != nil {
 		return nil, err
 	}
 
@@ -93,7 +93,7 @@ func AeCreateEventLoop(setsize int) (*AeEventLoop, error) {
 }
 
 func (el *AeEventLoop) AeApiPoll(tvp *TimeVal) int {
-	return apiPoll(el, tvp)
+	return aeApiPoll(el, tvp)
 }
 
 func (el *AeEventLoop) AeCreateTimeEvent(milliseconds int64, proc AeTimeProc, clientData interface{}, finalizerProc aeEventFinalizerProc) int64 {
@@ -132,7 +132,7 @@ func (el *AeEventLoop) AeDeleteFileEvent(fd, mask int) {
 		mask |= AE_BARRIER
 	}
 
-	apiDelEvent(el, fd, mask)
+	aeApiDelEvent(el, fd, mask)
 	fe.Mask = fe.Mask & (^mask)
 	if fd == el.MaxFd && fe.Mask == AE_NONE {
 		for i := el.MaxFd - 1; i >= 0; i-- {
@@ -150,8 +150,8 @@ func (el *AeEventLoop) AeCreateFileEvent(fd, mask int, proc AeFileProc, clientDa
 	}
 
 	fe := &el.Events[fd]
-	if err := apiAddEvent(el, fd, mask); err != nil {
-		return fmt.Errorf("apiAddEvent err: %v", err)
+	if err := aeApiAddEvent(el, fd, mask); err != nil {
+		return fmt.Errorf("aeApiAddEvent err: %v", err)
 	}
 
 	fe.Mask |= mask

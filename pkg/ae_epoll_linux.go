@@ -4,15 +4,15 @@ import (
 	"syscall"
 )
 
-type apiState struct {
+type aeApiState struct {
 	Epfd   int
 	Events []syscall.EpollEvent
 }
 
-func apiCreate(el *AeEventLoop) error {
-	state := new(apiState)
+func aeApiCreate(el *AeEventLoop) error {
+	state := new(aeApiState)
 
-	state.Events = make([]syscall.EpollEvent, el.SetSize, el.SetSize)
+	state.Events = make([]syscall.EpollEvent, el.SetSize)
 	epfd, err := syscall.EpollCreate(1024)
 	if err != nil {
 		return err
@@ -24,8 +24,8 @@ func apiCreate(el *AeEventLoop) error {
 	return nil
 }
 
-func apiPoll(el *AeEventLoop, tvp *TimeVal) (numevents int) {
-	state := el.ApiData.(*apiState)
+func aeApiPoll(el *AeEventLoop, tvp *TimeVal) (numevents int) {
+	state := el.ApiData.(*aeApiState)
 
 	if tvp == nil {
 		n, err := syscall.EpollWait(state.Epfd, state.Events, -1)
@@ -66,14 +66,14 @@ func apiPoll(el *AeEventLoop, tvp *TimeVal) (numevents int) {
 	return numevents
 }
 
-func apiAddEvent(el *AeEventLoop, fd, mask int) error {
-	state := el.ApiData.(*apiState)
+func aeApiAddEvent(el *AeEventLoop, fd, mask int) error {
+	state := el.ApiData.(*aeApiState)
 	ee := &syscall.EpollEvent{}
 	op := 0
 	if el.Events[fd].Mask&mask != AE_NONE {
 		op = syscall.EPOLL_CTL_MOD
 	} else {
-		op = syscall.EPOLL_CTL_MOD
+		op = syscall.EPOLL_CTL_ADD
 	}
 	mask |= el.Events[fd].Mask
 	if mask&AE_READABLE != 0 {
@@ -87,8 +87,8 @@ func apiAddEvent(el *AeEventLoop, fd, mask int) error {
 	return syscall.EpollCtl(state.Epfd, op, fd, ee)
 }
 
-func apiDelEvent(el *AeEventLoop, fd, delmask int) {
-	state := el.ApiData.(*apiState)
+func aeApiDelEvent(el *AeEventLoop, fd, delmask int) {
+	state := el.ApiData.(*aeApiState)
 	ee := &syscall.EpollEvent{}
 	mask := el.Events[fd].Mask & (^delmask)
 
@@ -107,6 +107,6 @@ func apiDelEvent(el *AeEventLoop, fd, delmask int) {
 	}
 }
 
-func apiName() string {
+func aeApiName() string {
 	return "epoll"
 }

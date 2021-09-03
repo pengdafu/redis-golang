@@ -1,13 +1,11 @@
 package pkg
 
-type apiState struct {
-
+type aeApiState struct {
 }
 
 // todo windows select ???
-func apiCreate(el *AeEventLoop) error {
-	state := new(apiState)
-
+func aeApiCreate(el *AeEventLoop) error {
+	state := new(aeApiState)
 
 	el.ApiData = state
 	return nil

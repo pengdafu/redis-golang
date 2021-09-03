@@ -1,5 +1,5 @@
 package pkg
 
-func apiCreate(el *AeEventLoop) error {
+func aeApiCreate(el *AeEventLoop) error {
 
 }

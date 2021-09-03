@@ -1,1 +1,4 @@
 .idea
+.vscode
+cmd/cmd
+cmd/_*

@@ -5,13 +5,13 @@ import (
 	"time"
 )
 
-type apiState struct {
+type aeApiState struct {
 	KqFd   int
 	Events []syscall.Kevent_t
 }
 
-func apiCreate(el *AeEventLoop) error {
-	state := new(apiState)
+func aeApiCreate(el *AeEventLoop) error {
+	state := new(aeApiState)
 
 	state.Events = make([]syscall.Kevent_t, el.SetSize)
 
@@ -27,8 +27,8 @@ func apiCreate(el *AeEventLoop) error {
 	return nil
 }
 
-func apiPoll(el *AeEventLoop, tvp *TimeVal) (numevents int) {
-	state := el.ApiData.(*apiState)
+func aeApiPoll(el *AeEventLoop, tvp *TimeVal) (numevents int) {
+	state := el.ApiData.(*aeApiState)
 
 	if tvp == nil {
 		n, err := syscall.Kevent(state.KqFd, nil, state.Events, nil)
@@ -66,8 +66,8 @@ func apiPoll(el *AeEventLoop, tvp *TimeVal) (numevents int) {
 	return
 }
 
-func apiDelEvent(el *AeEventLoop, fd, mask int) {
-	state := el.ApiData.(*apiState)
+func aeApiDelEvent(el *AeEventLoop, fd, mask int) {
+	state := el.ApiData.(*aeApiState)
 
 	ke := syscall.Kevent_t{}
 	if mask&AE_READABLE != 0 {
@@ -80,8 +80,8 @@ func apiDelEvent(el *AeEventLoop, fd, mask int) {
 	}
 }
 
-func apiAddEvent(el *AeEventLoop, fd, mask int) error {
-	state := el.ApiData.(*apiState)
+func aeApiAddEvent(el *AeEventLoop, fd, mask int) error {
+	state := el.ApiData.(*aeApiState)
 
 	ke := syscall.Kevent_t{}
 
@@ -100,6 +100,6 @@ func apiAddEvent(el *AeEventLoop, fd, mask int) error {
 	return nil
 }
 
-func apiName() string {
+func aeApiName() string {
 	return "kqueue"
 }

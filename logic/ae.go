@@ -1,8 +1,9 @@
 package logic
 
 import (
-	"github.com/pengdafu/redis-golang/pkg"
 	"time"
+
+	"github.com/pengdafu/redis-golang/pkg"
 )
 
 func AeMain(el *pkg.AeEventLoop) {
