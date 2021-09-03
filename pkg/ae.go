@@ -1,24 +1,23 @@
-package ae
+package pkg
 
 import (
 	"fmt"
-	pkgTime "github.com/pengdafu/redis-golang/pkg/time"
 )
 
 const (
-	NONE      = 0
-	READABLE  = 1
-	WRITEABLE = 2
-	BARRIER   = 4
+	AE_NONE     = 0
+	AE_READABLE  = 1
+	AE_WRITEABLE = 2
+	AE_BARRIER   = 4
 )
 
 const (
-	FILE_EVENTS = 1 << iota
-	TIME_EVENTS
-	DONT_WAIT
-	CALL_BEFORE_SLEEP
-	CALL_AFTER_SLEEP
-	ALL_EVENTS = FILE_EVENTS | TIME_EVENTS
+	AE_FILE_EVENTS = 1 << iota
+	AE_TIME_EVENTS
+	AE_DONT_WAIT
+	AE_CALL_BEFORE_SLEEP
+	AE_CALL_AFTER_SLEEP
+	AE_ALL_EVENTS = AE_FILE_EVENTS | AE_TIME_EVENTS
 )
 
 const (
@@ -43,7 +42,7 @@ type AeEventLoop struct {
 
 type AeFileProc func(el *AeEventLoop, fd int, clientData interface{}, mask int)
 type fileEvent struct {
-	Mask       int // AE_(WRITEABLE|READABLE|BARRIER) 中的一种
+	Mask       int // AE_(AE_WRITEABLE|AE_READABLE|AE_BARRIER) 中的一种
 	RFileProc  AeFileProc
 	WFileProc  AeFileProc
 	ClientData interface{}
@@ -87,13 +86,13 @@ func AeCreateEventLoop(setsize int) (*AeEventLoop, error) {
 	}
 
 	for i := 0; i < setsize; i++ {
-		el.Events[i].Mask = NONE
+		el.Events[i].Mask = AE_NONE
 	}
 
 	return el, nil
 }
 
-func (el *AeEventLoop) AeApiPoll(tvp *pkgTime.TimeVal) int {
+func (el *AeEventLoop) AeApiPoll(tvp *TimeVal) int {
 	return apiPoll(el, tvp)
 }
 
@@ -103,7 +102,7 @@ func (el *AeEventLoop) AeCreateTimeEvent(milliseconds int64, proc AeTimeProc, cl
 
 	te := new(timeEvent)
 	te.Id = id
-	te.When = pkgTime.GetMonotonicUs() + milliseconds*1000
+	te.When = GetMonotonicUs() + milliseconds*1000
 	te.TimeProc = proc
 	te.FinalizerProc = finalizerProc
 	te.ClientData = clientData
@@ -125,19 +124,19 @@ func (el *AeEventLoop) AeDeleteFileEvent(fd, mask int) {
 	}
 
 	fe := el.Events[fd]
-	if fe.Mask == NONE {
+	if fe.Mask == AE_NONE {
 		return
 	}
 
-	if mask&WRITEABLE != 0 {
-		mask |= BARRIER
+	if mask&AE_WRITEABLE != 0 {
+		mask |= AE_BARRIER
 	}
 
 	apiDelEvent(el, fd, mask)
 	fe.Mask = fe.Mask & (^mask)
-	if fd == el.MaxFd && fe.Mask == NONE {
+	if fd == el.MaxFd && fe.Mask == AE_NONE {
 		for i := el.MaxFd - 1; i >= 0; i-- {
-			if el.Events[i].Mask != NONE {
+			if el.Events[i].Mask != AE_NONE {
 				el.MaxFd = i
 				return
 			}
@@ -156,10 +155,10 @@ func (el *AeEventLoop) AeCreateFileEvent(fd, mask int, proc AeFileProc, clientDa
 	}
 
 	fe.Mask |= mask
-	if mask&WRITEABLE != 0 {
+	if mask&AE_WRITEABLE != 0 {
 		fe.WFileProc = proc
 	}
-	if mask&READABLE != 0 {
+	if mask&AE_READABLE != 0 {
 		fe.RFileProc = proc
 	}
 	fe.ClientData = clientData

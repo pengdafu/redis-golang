@@ -1,8 +1,7 @@
 package logic
 
 import (
-	"github.com/pengdafu/redis-golang/pkg/ae"
-	"github.com/pengdafu/redis-golang/pkg/net"
+	"github.com/pengdafu/redis-golang/pkg"
 	"log"
 )
 
@@ -10,23 +9,23 @@ const (
 	MAX_ACCEPTS_PER_CALL = 1000
 )
 
-func AcceptTcpHandler(el *ae.AeEventLoop, fd int, privdate interface{}, mask int) {
+func AcceptTcpHandler(el *pkg.AeEventLoop, fd int, privdata interface{}, mask int) {
 	max := MAX_ACCEPTS_PER_CALL
 	var cip string
 	var port int
 	for max > 0 {
 		max--
-		cfd, err := net.AnetAccept(fd, &cip, &port)
+		cfd, err := pkg.AnetAccept(fd, &cip, &port)
 		if err != nil {
 			log.Println("Accepting client connection:", err)
 			return
 		}
-		_ = net.AnetCloexec(cfd)
+		_ = pkg.AnetCloexec(cfd)
 		log.Printf("Accepting %s:%d ", cip, port)
-		acceptCommonHandler(net.ConnCreateAcceptedSocket(cfd, CT_Socket), 0, cip)
+		acceptCommonHandler(pkg.ConnCreateAcceptedSocket(cfd, CT_Socket), 0, cip)
 	}
 }
 
-func acceptCommonHandler(conn *net.Connection, flags int, ip string) {
+func acceptCommonHandler(conn *pkg.Connection, flags int, ip string) {
 
 }

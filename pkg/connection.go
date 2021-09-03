@@ -1,9 +1,7 @@
-package net
+package pkg
 
 import (
 	"time"
-
-	"github.com/pengdafu/redis-golang/pkg/ae"
 )
 
 const (
@@ -30,7 +28,7 @@ type Connection struct {
 
 type ConnectionCallbackFunc func(conn *Connection)
 type ConnectionType struct {
-	AeHandle        func(el *ae.AeEventLoop, fd int, clientData interface{}, mask int)
+	AeHandle        func(el *AeEventLoop, fd int, clientData interface{}, mask int)
 	Connect         func(conn *Connection, addr string, port int, sourceAddr string, connectHandler ConnectionCallbackFunc)
 	Write           func(conn *Connection, data interface{}, dataLen int)
 	Read            func(conn *Connection, buf interface{}, bufLen int)

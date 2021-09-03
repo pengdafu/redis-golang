@@ -3,8 +3,7 @@ package server
 import (
 	"fmt"
 	"github.com/pengdafu/redis-golang/logic"
-	"github.com/pengdafu/redis-golang/pkg/ae"
-	"github.com/pengdafu/redis-golang/pkg/net"
+	"github.com/pengdafu/redis-golang/pkg"
 	"log"
 	"os"
 	"strings"
@@ -21,7 +20,7 @@ var (
 )
 
 type RedisServer struct {
-	el *ae.AeEventLoop
+	el *pkg.AeEventLoop
 
 	port          int
 	ipfd          *socketFds
@@ -51,7 +50,7 @@ func (server *RedisServer) Init() {
 	server.bindAddrCount = 1
 
 	// 创建aeEventLoop
-	server.el, err = ae.AeCreateEventLoop(server.maxclients + CONFIG_FDSET_INCR)
+	server.el, err = pkg.AeCreateEventLoop(server.maxclients + CONFIG_FDSET_INCR)
 	if err != nil {
 		panic(fmt.Sprintf("create aeEventLoop err: %v", err))
 	}
@@ -64,7 +63,7 @@ func (server *RedisServer) Init() {
 	}
 
 	// 创建aeTimeEvent
-	if err := server.el.AeCreateTimeEvent(1, server.serverCron, nil, nil); err == ae.ERR {
+	if err := server.el.AeCreateTimeEvent(1, server.serverCron, nil, nil); err == pkg.ERR {
 		panic("Can't create event loop timer.")
 	}
 
@@ -79,15 +78,15 @@ func (server *RedisServer) Start() error {
 	return nil
 }
 
-func (server *RedisServer) serverCron(el *ae.AeEventLoop, id uint64, clientData interface{}) int {
+func (server *RedisServer) serverCron(el *pkg.AeEventLoop, id uint64, clientData interface{}) int {
 	return 0
 }
 
-func (server *RedisServer) createSocketAcceptHandler(sfd *socketFds, accessHandle ae.AeFileProc) error {
+func (server *RedisServer) createSocketAcceptHandler(sfd *socketFds, accessHandle pkg.AeFileProc) error {
 	for i := 0; i < sfd.count; i++ {
-		if err := server.el.AeCreateFileEvent(sfd.fd[i], ae.READABLE, accessHandle, nil); err != nil {
+		if err := server.el.AeCreateFileEvent(sfd.fd[i], pkg.AE_READABLE, accessHandle, nil); err != nil {
 			for j := i - 1; j >= 0; j-- {
-				server.el.AeDeleteFileEvent(sfd.fd[j], ae.READABLE)
+				server.el.AeDeleteFileEvent(sfd.fd[j], pkg.AE_READABLE)
 			}
 		}
 	}
@@ -107,16 +106,16 @@ func (server *RedisServer) listenToPort(port int, sfd *socketFds) (err error) {
 	for j := 0; j < bindAddrCount; j++ {
 		addr := bindAddr[j]
 		if strings.Index(addr, ":") != -1 {
-			sfd.fd[sfd.count], err = net.AnetTcp6Server(port, addr, server.tcpBacklog)
+			sfd.fd[sfd.count], err = pkg.AnetTcp6Server(port, addr, server.tcpBacklog)
 		} else {
-			sfd.fd[sfd.count], err = net.AnetTcpServer(port, addr, server.tcpBacklog)
+			sfd.fd[sfd.count], err = pkg.AnetTcpServer(port, addr, server.tcpBacklog)
 		}
 		if err != nil {
 			server.closeSocketListeners(sfd)
 			return err
 		}
-		_ = net.AnetNonBlock(sfd.fd[sfd.count])
-		_ = net.AnetCloexec(sfd.fd[sfd.count])
+		_ = pkg.AnetNonBlock(sfd.fd[sfd.count])
+		_ = pkg.AnetCloexec(sfd.fd[sfd.count])
 		sfd.count++
 	}
 	return nil
@@ -127,7 +126,7 @@ func (server *RedisServer) closeSocketListeners(sfd *socketFds) {
 		if sfd.fd[i] == -1 {
 			continue
 		}
-		server.el.AeDeleteFileEvent(sfd.fd[i], ae.READABLE)
+		server.el.AeDeleteFileEvent(sfd.fd[i], pkg.AE_READABLE)
 	}
 	sfd.count = 0
 }

@@ -1,8 +1,6 @@
-package ae
+package pkg
 
 import (
-	"github.com/pengdafu/redis-golang/pkg/net"
-	pkgTime "github.com/pengdafu/redis-golang/pkg/time"
 	"syscall"
 	"time"
 )
@@ -23,13 +21,13 @@ func apiCreate(el *AeEventLoop) error {
 	}
 	state.KqFd = kqfd
 
-	_ = net.AnetCloexec(kqfd)
+	_ = AnetCloexec(kqfd)
 	el.ApiData = state
 
 	return nil
 }
 
-func apiPoll(el *AeEventLoop, tvp *pkgTime.TimeVal) (numevents int) {
+func apiPoll(el *AeEventLoop, tvp *TimeVal) (numevents int) {
 	state := el.ApiData.(*apiState)
 
 	if tvp == nil {
@@ -55,10 +53,10 @@ func apiPoll(el *AeEventLoop, tvp *pkgTime.TimeVal) (numevents int) {
 			e := state.Events[i]
 
 			if e.Filter&syscall.EVFILT_WRITE != 0 {
-				mask |= WRITEABLE
+				mask |= AE_WRITEABLE
 			}
 			if e.Filter&syscall.EVFILT_READ != 0 {
-				mask |= READABLE
+				mask |= AE_READABLE
 			}
 
 			el.Fired[i].Fd = e.Ident
@@ -72,11 +70,11 @@ func apiDelEvent(el *AeEventLoop, fd, mask int) {
 	state := el.ApiData.(*apiState)
 
 	ke := syscall.Kevent_t{}
-	if mask&READABLE != 0 {
+	if mask&AE_READABLE != 0 {
 		syscall.SetKevent(&ke, fd, syscall.EVFILT_READ, syscall.EV_DELETE)
 		_, _ = syscall.Kevent(state.KqFd, []syscall.Kevent_t{ke}, nil, nil)
 	}
-	if mask&WRITEABLE != 0 {
+	if mask&AE_WRITEABLE != 0 {
 		syscall.SetKevent(&ke, fd, syscall.EVFILT_WRITE, syscall.EV_DELETE)
 		_, _ = syscall.Kevent(state.KqFd, []syscall.Kevent_t{ke}, nil, nil)
 	}
@@ -87,13 +85,13 @@ func apiAddEvent(el *AeEventLoop, fd, mask int) error {
 
 	ke := syscall.Kevent_t{}
 
-	if mask&READABLE != 0 {
+	if mask&AE_READABLE != 0 {
 		syscall.SetKevent(&ke, fd, syscall.EVFILT_READ, syscall.EV_ADD)
 		if _, err := syscall.Kevent(state.KqFd, []syscall.Kevent_t{ke}, nil, nil); err != nil {
 			return err
 		}
 	}
-	if mask&WRITEABLE != 0 {
+	if mask&AE_WRITEABLE != 0 {
 		syscall.SetKevent(&ke, fd, syscall.EVFILT_WRITE, syscall.EV_ADD)
 		if _, err := syscall.Kevent(state.KqFd, []syscall.Kevent_t{ke}, nil, nil); err != nil {
 			return err

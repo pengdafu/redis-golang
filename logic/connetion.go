@@ -1,14 +1,13 @@
 package logic
 
 import (
-	"github.com/pengdafu/redis-golang/pkg/ae"
-	"github.com/pengdafu/redis-golang/pkg/net"
+	"github.com/pengdafu/redis-golang/pkg"
 )
 
-var CT_Socket *net.ConnectionType
+var CT_Socket *pkg.ConnectionType
 
 func init() {
-	CT_Socket = &net.ConnectionType{
+	CT_Socket = &pkg.ConnectionType{
 		AeHandle:        connSocketEventHandler,
 		Connect:         nil,
 		Write:           nil,
@@ -26,6 +25,6 @@ func init() {
 	}
 }
 
-func connSocketEventHandler(el *ae.AeEventLoop, fd int, clientData interface{}, mask int) {
+func connSocketEventHandler(el *pkg.AeEventLoop, fd int, clientData interface{}, mask int) {
 
 }
