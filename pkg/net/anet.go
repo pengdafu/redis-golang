@@ -112,3 +112,27 @@ func anetSetBlock(fd int, nonBlock bool) error {
 
 	return nil
 }
+
+func AnetAccept(s int, ip *string, port *int) (connFd int, err error) {
+	return anetGenericAccept(s, ip, port)
+}
+
+func anetGenericAccept(s int, ip *string, port *int) (nfd int, err error) {
+	nfd, _, err = syscall.Accept(s)
+	sa, _ := syscall.Getpeername(nfd)
+	if sa == nil {
+		return
+	}
+	sd, ok := sa.(*syscall.SockaddrInet4)
+	if ok {
+		*port = sd.Port
+		*ip = net.IP(sd.Addr[:]).String()
+	}
+
+	sd6, ok := sa.(*syscall.SockaddrInet6)
+	if ok {
+		*port = sd6.Port
+		*ip = net.IP(sd6.Addr[:]).String()
+	}
+	return nfd, err
+}

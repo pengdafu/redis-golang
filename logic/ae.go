@@ -64,7 +64,7 @@ func AeProcessEvent(el *ae.AeEventLoop, flags int) (processed int) {
 			invert := fe.Mask & ae.BARRIER
 
 			if invert == 0 && fe.Mask&mask&ae.READABLE != 0 {
-				fe.RFileProc(int(fd), fe.ClientData, mask)
+				fe.RFileProc(el, int(fd), fe.ClientData, mask)
 				fired++
 				fe = el.Events[fd]
 			}
