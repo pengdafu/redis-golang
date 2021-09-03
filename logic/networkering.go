@@ -18,10 +18,15 @@ func AcceptTcpHandler(el *ae.AeEventLoop, fd int, privdate interface{}, mask int
 		max--
 		cfd, err := net.AnetAccept(fd, &cip, &port)
 		if err != nil {
-			log.Println(err)
+			log.Println("Accepting client connection:", err)
 			return
 		}
 		_ = net.AnetCloexec(cfd)
 		log.Printf("Accepting %s:%d ", cip, port)
+		acceptCommonHandler(net.ConnCreateAcceptedSocket(cfd, CT_Socket), 0, cip)
 	}
+}
+
+func acceptCommonHandler(conn *net.Connection, flags int, ip string) {
+
 }
