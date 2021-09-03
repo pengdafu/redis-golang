@@ -1,8 +1,9 @@
 package net
 
 import (
-	"github.com/pengdafu/redis-golang/pkg/ae"
 	"time"
+
+	"github.com/pengdafu/redis-golang/pkg/ae"
 )
 
 const (
