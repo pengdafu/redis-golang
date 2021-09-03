@@ -11,13 +11,13 @@ func AnetCloexec(fd int) (err error) {
 	var r, flags int
 	for {
 		_, _, r := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFD, 0)
-		if r == -1 && r == syscall.EINTR {
+		if r != 0 && r.Is(syscall.EINTR) {
 			continue
 		}
 		break
 	}
 
-	if r == -1 || r&syscall.FD_CLOEXEC != 0 {
+	if r != 0 || r&syscall.FD_CLOEXEC != 0 {
 		return fmt.Errorf("fcntl get errno: %v", r)
 	}
 
@@ -25,7 +25,7 @@ func AnetCloexec(fd int) (err error) {
 
 	for {
 		_, _, r := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_SETFD, uintptr(flags))
-		if r == -1 && r == syscall.EINTR {
+		if r != 0 && r == syscall.EINTR {
 			continue
 		}
 		break
@@ -45,7 +45,7 @@ func AnetTcp6Server(port int, addr string, backlog int) (int, error) {
 }
 
 func _anetTcpServer(port int, addr string, af, backlog int) (s int, err error) {
-	s, err = syscall.Socket(af, syscall.O_NONBLOCK|syscall.SOCK_STREAM, 0)
+	s, err = syscall.Socket(af, syscall.SOCK_STREAM, syscall.IPPROTO_TCP)
 	if err != nil {
 		return
 	}
@@ -89,7 +89,8 @@ func AnetNonBlock(fd int) error {
 
 func anetSetBlock(fd int, nonBlock bool) error {
 	_, _, flags := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFL, 0)
-	if flags == -1 {
+	r := int(flags)
+	if flags != 0 {
 		return fmt.Errorf("fcntl(F_GETFL) err: %d", flags)
 	}
 
@@ -98,14 +99,14 @@ func anetSetBlock(fd int, nonBlock bool) error {
 	}
 
 	if nonBlock {
-		flags |= syscall.O_NONBLOCK
+		r |= syscall.O_NONBLOCK
 	} else {
-		flags &= ^syscall.O_NONBLOCK
+		r &= ^syscall.O_NONBLOCK
 	}
 
-	_, _, flags = syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_SETFL, uintptr(flags))
+	_, _, flags = syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_SETFL, uintptr(r))
 
-	if flags == -1 {
+	if flags != 0 {
 		return errors.New("fcntl(F_SETFL) err")
 	}
 

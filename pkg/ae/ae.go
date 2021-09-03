@@ -6,10 +6,10 @@ import (
 )
 
 const (
-	NONE = iota << 1
-	READABLE
-	WRITEABLE
-	BARRIER
+	NONE      = 0
+	READABLE  = 1
+	WRITEABLE = 2
+	BARRIER   = 4
 )
 
 const (
@@ -41,7 +41,7 @@ type AeEventLoop struct {
 	Flags           int
 }
 
-type AeFileProc func(fd int, clientData interface{}, mask int)
+type AeFileProc func(el *AeEventLoop, fd int, clientData interface{}, mask int)
 type fileEvent struct {
 	Mask       int // AE_(WRITEABLE|READABLE|BARRIER) 中的一种
 	RFileProc  AeFileProc

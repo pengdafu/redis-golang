@@ -15,7 +15,7 @@ type apiState struct {
 func apiCreate(el *AeEventLoop) error {
 	state := new(apiState)
 
-	state.Events = make([]syscall.Kevent_t, 0, el.SetSize)
+	state.Events = make([]syscall.Kevent_t, el.SetSize)
 
 	kqfd, err := syscall.Kqueue()
 	if err != nil {
@@ -69,9 +69,39 @@ func apiPoll(el *AeEventLoop, tvp *pkgTime.TimeVal) (numevents int) {
 }
 
 func apiDelEvent(el *AeEventLoop, fd, mask int) {
+	state := el.ApiData.(*apiState)
 
+	ke := syscall.Kevent_t{}
+	if mask&READABLE != 0 {
+		syscall.SetKevent(&ke, fd, syscall.EVFILT_READ, syscall.EV_DELETE)
+		_, _ = syscall.Kevent(state.KqFd, []syscall.Kevent_t{ke}, nil, nil)
+	}
+	if mask&WRITEABLE != 0 {
+		syscall.SetKevent(&ke, fd, syscall.EVFILT_WRITE, syscall.EV_DELETE)
+		_, _ = syscall.Kevent(state.KqFd, []syscall.Kevent_t{ke}, nil, nil)
+	}
 }
 
 func apiAddEvent(el *AeEventLoop, fd, mask int) error {
+	state := el.ApiData.(*apiState)
+
+	ke := syscall.Kevent_t{}
+
+	if mask&READABLE != 0 {
+		syscall.SetKevent(&ke, fd, syscall.EVFILT_READ, syscall.EV_ADD)
+		if _, err := syscall.Kevent(state.KqFd, []syscall.Kevent_t{ke}, nil, nil); err != nil {
+			return err
+		}
+	}
+	if mask&WRITEABLE != 0 {
+		syscall.SetKevent(&ke, fd, syscall.EVFILT_WRITE, syscall.EV_ADD)
+		if _, err := syscall.Kevent(state.KqFd, []syscall.Kevent_t{ke}, nil, nil); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func apiName() string {
+	return "kqueue"
 }

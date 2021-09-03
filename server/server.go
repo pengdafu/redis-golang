@@ -45,6 +45,11 @@ func New() (redisServer *RedisServer) {
 func (server *RedisServer) Init() {
 	var err error
 
+	server.ipfd = new(socketFds)
+	server.port = 6379
+	server.bindAddr[0] = "127.0.0.1"
+	server.bindAddrCount = 1
+
 	// 创建aeEventLoop
 	server.el, err = ae.AeCreateEventLoop(server.maxclients + CONFIG_FDSET_INCR)
 	if err != nil {
@@ -52,7 +57,8 @@ func (server *RedisServer) Init() {
 	}
 
 	if server.port != 0 {
-		if server.listenToPort(server.port, server.ipfd) != C_OK {
+		if err := server.listenToPort(server.port, server.ipfd); err != C_OK {
+			log.Println(err)
 			os.Exit(1)
 		}
 	}
@@ -63,7 +69,7 @@ func (server *RedisServer) Init() {
 	}
 
 	// 创建连接处理
-	if server.createSocketAcceptHandler(server.ipfd, server.acceptTcpHandler) != C_OK {
+	if server.createSocketAcceptHandler(server.ipfd, logic.AcceptTcpHandler) != C_OK {
 		panic("Unrecoverable error creating TCP socket accept handler.")
 	}
 }
@@ -75,10 +81,6 @@ func (server *RedisServer) Start() error {
 
 func (server *RedisServer) serverCron(el *ae.AeEventLoop, id uint64, clientData interface{}) int {
 	return 0
-}
-
-func (server *RedisServer) acceptTcpHandler(fd int, clientData interface{}, mask int) {
-	log.Println("connect new client")
 }
 
 func (server *RedisServer) createSocketAcceptHandler(sfd *socketFds, accessHandle ae.AeFileProc) error {

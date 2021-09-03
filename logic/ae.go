@@ -50,8 +50,26 @@ func AeProcessEvent(el *ae.AeEventLoop, flags int) (processed int) {
 		}
 
 		numevents = el.AeApiPoll(timeVal)
-		for i := 0; i < numevents; i++ {
 
+		if el.AfterSleep != nil && flags&ae.CALL_AFTER_SLEEP != 0 {
+			el.AfterSleep(el)
+		}
+
+		for i := 0; i < numevents; i++ {
+			fe := el.Events[el.Fired[i].Fd]
+			fd := el.Fired[i].Fd
+			mask := el.Fired[i].Mask
+			fired := 0
+
+			invert := fe.Mask & ae.BARRIER
+
+			if invert == 0 && fe.Mask&mask&ae.READABLE != 0 {
+				fe.RFileProc(int(fd), fe.ClientData, mask)
+				fired++
+				fe = el.Events[fd]
+			}
+
+			processed++
 		}
 	}
 
