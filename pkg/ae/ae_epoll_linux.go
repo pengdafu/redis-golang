@@ -69,3 +69,48 @@ func apiPoll(el *AeEventLoop, tvp *pkgTime.TimeVal) (numevents int) {
 	}
 	return numevents
 }
+
+func apiAddEvent(el *AeEventLoop, fd, mask int) error {
+	state := el.ApiData.(*apiState)
+	ee := &syscall.EpollEvent{}
+	op := 0
+	if el.Events[fd].Mask&mask != NONE {
+		op = syscall.EPOLL_CTL_MOD
+	} else {
+		op = syscall.EPOLL_CTL_MOD
+	}
+	mask |= el.Events[fd].Mask
+	if mask&READABLE != 0 {
+		ee.Events |= syscall.EPOLLIN
+	}
+	if mask&WRITEABLE != 0 {
+		ee.Events |= syscall.EPOLLOUT
+	}
+	ee.Fd = int32(fd)
+
+	return syscall.EpollCtl(state.Epfd, op, fd, ee)
+}
+
+func apiDelEvent(el *AeEventLoop, fd, delmask int) {
+	state := el.ApiData.(*apiState)
+	ee := &syscall.EpollEvent{}
+	mask := el.Events[fd].Mask & (^delmask)
+
+	if mask&READABLE != 0 {
+		ee.Events |= syscall.EPOLLIN
+	}
+	if mask&WRITEABLE != 0 {
+		ee.Events |= syscall.EPOLLOUT
+	}
+
+	ee.Fd = int32(fd)
+	if mask != NONE {
+		_ = syscall.EpollCtl(state.Epfd, syscall.EPOLL_CTL_MOD, fd, ee)
+	} else {
+		_ = syscall.EpollCtl(state.Epfd, syscall.EPOLL_CTL_DEL, fd, ee)
+	}
+}
+
+func apiName() string {
+	return "epoll"
+}
