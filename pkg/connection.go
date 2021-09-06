@@ -1,6 +1,7 @@
 package pkg
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -56,4 +57,20 @@ func connCreateSocket(CT_Socket *ConnectionType) *Connection {
 	conn.Fd = -1
 	conn.Type = CT_Socket
 	return conn
+}
+
+func (c *Connection) GetState() int {
+	return c.State
+}
+
+func GetLastErr(conn *Connection) error {
+	return fmt.Errorf("error: %d", conn.LastErrNo)
+}
+
+func (c *Connection) ConnGetLastError() error {
+	return c.Type.GetLastError(c)
+}
+
+func (c *Connection) Close() {
+	c.Type.Close(c)
 }

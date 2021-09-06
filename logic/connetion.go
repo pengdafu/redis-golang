@@ -12,11 +12,11 @@ func init() {
 		Connect:         nil,
 		Write:           nil,
 		Read:            nil,
-		Close:           nil,
+		Close:           connSocketClose,
 		Accept:          nil,
 		SetWriteHandler: nil,
 		SetReadHandler:  nil,
-		GetLastError:    nil,
+		GetLastError:    pkg.GetLastErr,
 		BlockingConnect: nil,
 		SyncWrite:       nil,
 		SyncRead:        nil,
@@ -27,4 +27,10 @@ func init() {
 
 func connSocketEventHandler(el *pkg.AeEventLoop, fd int, clientData interface{}, mask int) {
 
+}
+
+func ConnSocketClose(conn *pkg.Connection) {
+	if conn.Fd != -1 {
+
+	}
 }

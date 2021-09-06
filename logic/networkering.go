@@ -27,5 +27,8 @@ func AcceptTcpHandler(el *pkg.AeEventLoop, fd int, privdata interface{}, mask in
 }
 
 func acceptCommonHandler(conn *pkg.Connection, flags int, ip string) {
-
+	if conn.GetState() != pkg.CONN_STATE_ACCEPTING {
+		log.Printf("Accepted client connection in error state: %v", conn.ConnGetLastError())
+		return
+	}
 }

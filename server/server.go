@@ -130,3 +130,7 @@ func (server *RedisServer) closeSocketListeners(sfd *socketFds) {
 	}
 	sfd.count = 0
 }
+
+func (server *RedisServer) connSocketClose(conn *pkg.Connection) {
+	con
+}
