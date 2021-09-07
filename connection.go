@@ -1,9 +1,10 @@
 package main
 
 import (
-	"github.com/pengdafu/redis-golang/pkg"
 	"syscall"
 	"time"
+
+	"github.com/pengdafu/redis-golang/pkg"
 )
 
 const (
@@ -108,7 +109,7 @@ func connSocketEventHandler(el *AeEventLoop, fd int, clientData interface{}, mas
 
 func connSocketClose(conn *Connection) {
 	if conn.Fd != -1 {
-		server.el.AeDeleteFileEvent(conn.Fd, AE_READABLE|AE_WRITEABLE)
+		server.el.aeDeleteFileEvent(conn.Fd, AE_READABLE|AE_WRITEABLE)
 		syscall.Close(conn.Fd)
 		conn.Fd = -1
 	}
@@ -157,4 +158,19 @@ func connSocketWrite(conn *Connection, data string) error {
 		}
 	}
 	return err
+}
+
+func connKeepAlive(conn *Connection, interval int) error {
+	if conn.Fd == -1 {
+		return C_ERR
+	}
+	return anetKeepAlive(conn.Fd, interval)
+}
+
+func connSetPrivateData(conn *Connection, data interface{}) {
+	conn.PrivateData = data
+}
+
+func connSetReadhanler(conn *Connection, fc ConnectionCallbackFunc) {
+	conn.Type.SetReadHandler(conn, fc)
 }

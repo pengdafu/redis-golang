@@ -2,7 +2,7 @@ package main
 
 import "time"
 
-func GetMonotonicUs() int64 {
+func getMonotonicUs() int64 {
 	return time.Now().UnixNano() / 1e3
 }
 

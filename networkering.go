@@ -8,7 +8,7 @@ const (
 	MAX_ACCEPTS_PER_CALL = 1000
 )
 
-func AcceptTcpHandler(el *AeEventLoop, fd int, privdata interface{}, mask int) {
+func acceptTcpHandler(el *AeEventLoop, fd int, privdata interface{}, mask int) {
 	max := MAX_ACCEPTS_PER_CALL
 	var cip string
 	var port int
@@ -46,7 +46,14 @@ func acceptCommonHandler(conn *Connection, flags int, ip string) {
 		return
 	}
 
-	
+	c := createClient(conn)
+	if c == nil {
+		connClose(conn)
+		return
+	}
+
+	// todo client
+
 }
 
 func createClient(conn *Connection) *Client {
@@ -55,8 +62,18 @@ func createClient(conn *Connection) *Client {
 	if conn != nil {
 		_ = connNonBlock(conn)
 		_ = connEnableTcpNoDelay(conn)
-		if server.tcpKeepalive {
-
+		if server.tcpKeepalive > 0 {
+			_ = connKeepAlive(conn, server.tcpKeepalive)
 		}
+		connSetReadhanler(conn, readQueryFromClient)
+		connSetPrivateData(conn, client)
 	}
+
+	// todo SelectDb()
+
+	return client
+}
+
+func readQueryFromClient(conn *Connection) {
+
 }

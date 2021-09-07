@@ -67,7 +67,7 @@ type timeEvent struct {
 	RefCount      int // 在递归时间事件被调用时，refCount为了防止时间器事件被释放
 }
 
-func AeCreateEventLoop(setsize int) (*AeEventLoop, error) {
+func aeCreateEventLoop(setsize int) (*AeEventLoop, error) {
 	el := new(AeEventLoop)
 
 	el.Events = make([]fileEvent, setsize, setsize)
@@ -93,17 +93,17 @@ func AeCreateEventLoop(setsize int) (*AeEventLoop, error) {
 	return el, nil
 }
 
-func (el *AeEventLoop) AeApiPoll(tvp *TimeVal) int {
+func (el *AeEventLoop) aeApiPoll(tvp *TimeVal) int {
 	return aeApiPoll(el, tvp)
 }
 
-func (el *AeEventLoop) AeCreateTimeEvent(milliseconds int64, proc AeTimeProc, clientData interface{}, finalizerProc aeEventFinalizerProc) int64 {
+func (el *AeEventLoop) aeCreateTimeEvent(milliseconds int64, proc AeTimeProc, clientData interface{}, finalizerProc aeEventFinalizerProc) int64 {
 	id := el.TimeEventNextId
 	el.TimeEventNextId++
 
 	te := new(timeEvent)
 	te.Id = id
-	te.When = GetMonotonicUs() + milliseconds*1000
+	te.When = getMonotonicUs() + milliseconds*1000
 	te.TimeProc = proc
 	te.FinalizerProc = finalizerProc
 	te.ClientData = clientData
@@ -119,7 +119,7 @@ func (el *AeEventLoop) AeCreateTimeEvent(milliseconds int64, proc AeTimeProc, cl
 	return id
 }
 
-func (el *AeEventLoop) AeDeleteFileEvent(fd, mask int) {
+func (el *AeEventLoop) aeDeleteFileEvent(fd, mask int) {
 	if fd >= el.SetSize {
 		return
 	}
@@ -145,7 +145,7 @@ func (el *AeEventLoop) AeDeleteFileEvent(fd, mask int) {
 	}
 }
 
-func (el *AeEventLoop) AeCreateFileEvent(fd, mask int, proc AeFileProc, clientData interface{}) error {
+func (el *AeEventLoop) aeCreateFileEvent(fd, mask int, proc AeFileProc, clientData interface{}) error {
 	if fd >= el.SetSize {
 		return fmt.Errorf("fd out of range: %d", fd)
 	}
@@ -169,14 +169,14 @@ func (el *AeEventLoop) AeCreateFileEvent(fd, mask int, proc AeFileProc, clientDa
 	return nil
 }
 
-func AeMain(el *AeEventLoop) {
+func aeMain(el *AeEventLoop) {
 	el.Stop = 0
 	for el.Stop == 0 {
-		AeProcessEvent(el, AE_ALL_EVENTS|AE_CALL_BEFORE_SLEEP|AE_CALL_AFTER_SLEEP)
+		aeProcessEvent(el, AE_ALL_EVENTS|AE_CALL_BEFORE_SLEEP|AE_CALL_AFTER_SLEEP)
 	}
 }
 
-func AeProcessEvent(el *AeEventLoop, flags int) (processed int) {
+func aeProcessEvent(el *AeEventLoop, flags int) (processed int) {
 	var numevents int
 
 	// 没有时间事件和文件(IO)事件，什么也不处理
@@ -212,7 +212,7 @@ func AeProcessEvent(el *AeEventLoop, flags int) (processed int) {
 			el.BeforeSleep(el)
 		}
 
-		numevents = el.AeApiPoll(timeVal)
+		numevents = el.aeApiPoll(timeVal)
 
 		if el.AfterSleep != nil && flags&AE_CALL_AFTER_SLEEP != 0 {
 			el.AfterSleep(el)
@@ -266,7 +266,7 @@ func msUntilEarliestTimer(el *AeEventLoop) int64 {
 		}
 		te = te.Next
 	}
-	now := GetMonotonicUs()
+	now := getMonotonicUs()
 	if now >= earliest.When {
 		return 0
 	}

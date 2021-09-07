@@ -35,7 +35,7 @@ type RedisServer struct {
 	clients          []interface{}
 	clusterEnabled   bool
 	statRejectedConn uint64
-	tcpKeepalive     bool
+	tcpKeepalive     int
 	maxclients       int
 }
 
@@ -58,7 +58,7 @@ func (server *RedisServer) Init() {
 	server.bindAddrCount = 1
 
 	// 创建aeEventLoop
-	server.el, err = AeCreateEventLoop(server.maxclients + CONFIG_FDSET_INCR)
+	server.el, err = aeCreateEventLoop(server.maxclients + CONFIG_FDSET_INCR)
 	if err != nil {
 		panic(fmt.Sprintf("create aeEventLoop err: %v", err))
 	}
@@ -71,18 +71,18 @@ func (server *RedisServer) Init() {
 	}
 
 	// 创建aeTimeEvent
-	if err := server.el.AeCreateTimeEvent(1, server.serverCron, nil, nil); err == ERR {
+	if err := server.el.aeCreateTimeEvent(1, server.serverCron, nil, nil); err == ERR {
 		panic("Can't create event loop timer.")
 	}
 
 	// 创建连接处理
-	if server.createSocketAcceptHandler(server.ipfd, AcceptTcpHandler) != C_OK {
+	if server.createSocketAcceptHandler(server.ipfd, acceptTcpHandler) != C_OK {
 		panic("Unrecoverable error creating TCP socket accept handler.")
 	}
 }
 
 func (server *RedisServer) Start() error {
-	AeMain(server.el)
+	aeMain(server.el)
 	return nil
 }
 
@@ -92,9 +92,9 @@ func (server *RedisServer) serverCron(el *AeEventLoop, id uint64, clientData int
 
 func (server *RedisServer) createSocketAcceptHandler(sfd *socketFds, accessHandle AeFileProc) error {
 	for i := 0; i < sfd.count; i++ {
-		if err := server.el.AeCreateFileEvent(sfd.fd[i], AE_READABLE, accessHandle, nil); err != nil {
+		if err := server.el.aeCreateFileEvent(sfd.fd[i], AE_READABLE, accessHandle, nil); err != nil {
 			for j := i - 1; j >= 0; j-- {
-				server.el.AeDeleteFileEvent(sfd.fd[j], AE_READABLE)
+				server.el.aeDeleteFileEvent(sfd.fd[j], AE_READABLE)
 			}
 		}
 	}
@@ -113,7 +113,7 @@ func (server *RedisServer) listenToPort(port int, sfd *socketFds) (err error) {
 
 	for j := 0; j < bindAddrCount; j++ {
 		addr := bindAddr[j]
-		if strings.Index(addr, ":") != -1 {
+		if strings.Contains(addr, ":") {
 			sfd.fd[sfd.count], err = anetTcp6Server(port, addr, server.tcpBacklog)
 		} else {
 			sfd.fd[sfd.count], err = anetTcpServer(port, addr, server.tcpBacklog)
@@ -134,7 +134,7 @@ func (server *RedisServer) closeSocketListeners(sfd *socketFds) {
 		if sfd.fd[i] == -1 {
 			continue
 		}
-		server.el.AeDeleteFileEvent(sfd.fd[i], AE_READABLE)
+		server.el.aeDeleteFileEvent(sfd.fd[i], AE_READABLE)
 	}
 	sfd.count = 0
 }
