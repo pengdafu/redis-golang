@@ -1,4 +1,4 @@
-package pkg
+package main
 
 import (
 	"fmt"
@@ -73,4 +73,35 @@ func (c *Connection) ConnGetLastError() error {
 
 func (c *Connection) Close() {
 	c.Type.Close(c)
+}
+
+var CT_Socket *ConnectionType
+
+func init() {
+	CT_Socket = &ConnectionType{
+		AeHandle:        connSocketEventHandler,
+		Connect:         nil,
+		Write:           nil,
+		Read:            nil,
+		Close:           connSocketClose,
+		Accept:          nil,
+		SetWriteHandler: nil,
+		SetReadHandler:  nil,
+		GetLastError:    GetLastErr,
+		BlockingConnect: nil,
+		SyncWrite:       nil,
+		SyncRead:        nil,
+		SyncReadline:    nil,
+		GetType:         nil,
+	}
+}
+
+func connSocketEventHandler(el *AeEventLoop, fd int, clientData interface{}, mask int) {
+
+}
+
+func connSocketClose(conn *Connection) {
+	if conn.Fd != -1 {
+
+	}
 }
