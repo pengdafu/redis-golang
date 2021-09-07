@@ -20,7 +20,7 @@ func aeApiCreate(el *AeEventLoop) error {
 	state.Epfd = epfd
 
 	el.ApiData = state
-	_ = AnetCloexec(epfd)
+	_ = anetCloexec(epfd)
 	return nil
 }
 

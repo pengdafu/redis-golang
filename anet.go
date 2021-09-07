@@ -7,7 +7,7 @@ import (
 	"syscall"
 )
 
-func AnetCloexec(fd int) (err error) {
+func anetCloexec(fd int) (err error) {
 	var r, flags int
 	for {
 		_, _, r := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFD, 0)
@@ -36,11 +36,11 @@ func AnetCloexec(fd int) (err error) {
 	return nil
 }
 
-func AnetTcpServer(port int, addr string, backlog int) (int, error) {
+func anetTcpServer(port int, addr string, backlog int) (int, error) {
 	return _anetTcpServer(port, addr, syscall.AF_INET, backlog)
 }
 
-func AnetTcp6Server(port int, addr string, backlog int) (int, error) {
+func anetTcp6Server(port int, addr string, backlog int) (int, error) {
 	return _anetTcpServer(port, addr, syscall.AF_INET6, backlog)
 }
 
@@ -83,7 +83,7 @@ func anetListen(s int, addr syscall.Sockaddr, backlog int) error {
 	return nil
 }
 
-func AnetNonBlock(fd int) error {
+func anetNonBlock(fd int) error {
 	return anetSetBlock(fd, true)
 }
 
@@ -113,7 +113,18 @@ func anetSetBlock(fd int, nonBlock bool) error {
 	return nil
 }
 
-func AnetAccept(s int, ip *string, port *int) (connFd int, err error) {
+func anetEnableTcpNoDelay(fd int) error {
+	return anetSetTcpNoDelay(fd, 1)
+}
+
+func anetSetTcpNoDelay(fd, val int) error {
+	if err := syscall.SetsockoptInt(fd, syscall.IPPROTO_TCP, syscall.TCP_NODELAY, val); err != nil {
+		return err
+	}
+	return nil
+}
+
+func anetAccept(s int, ip *string, port *int) (connFd int, err error) {
 	return anetGenericAccept(s, ip, port)
 }
 

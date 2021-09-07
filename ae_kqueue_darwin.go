@@ -21,7 +21,7 @@ func aeApiCreate(el *AeEventLoop) error {
 	}
 	state.KqFd = kqfd
 
-	_ = AnetCloexec(kqfd)
+	_ = anetCloexec(kqfd)
 	el.ApiData = state
 
 	return nil

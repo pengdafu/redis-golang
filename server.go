@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -14,9 +15,14 @@ const (
 )
 
 var (
-	C_OK error = nil
+	C_OK  error = nil
+	C_ERR error = errors.New("error")
 )
 
+type socketFds struct {
+	fd    [CONFIG_BINDADDR_MAX]int
+	count int
+}
 type RedisServer struct {
 	el *AeEventLoop
 
@@ -26,17 +32,21 @@ type RedisServer struct {
 	bindAddr      [CONFIG_BINDADDR_MAX]string
 	bindAddrCount int
 
-	maxclients int
+	clients          []interface{}
+	clusterEnabled   bool
+	statRejectedConn uint64
+	tcpKeepalive     bool
+	maxclients       int
 }
 
-type socketFds struct {
-	fd    [CONFIG_BINDADDR_MAX]int
-	count int
+var server *RedisServer
+
+type Client struct {
 }
 
-func New() (redisServer *RedisServer) {
-	redisServer = new(RedisServer)
-	return
+func New() *RedisServer {
+	server = new(RedisServer)
+	return server
 }
 
 func (server *RedisServer) Init() {
@@ -104,16 +114,16 @@ func (server *RedisServer) listenToPort(port int, sfd *socketFds) (err error) {
 	for j := 0; j < bindAddrCount; j++ {
 		addr := bindAddr[j]
 		if strings.Index(addr, ":") != -1 {
-			sfd.fd[sfd.count], err = AnetTcp6Server(port, addr, server.tcpBacklog)
+			sfd.fd[sfd.count], err = anetTcp6Server(port, addr, server.tcpBacklog)
 		} else {
-			sfd.fd[sfd.count], err = AnetTcpServer(port, addr, server.tcpBacklog)
+			sfd.fd[sfd.count], err = anetTcpServer(port, addr, server.tcpBacklog)
 		}
 		if err != nil {
 			server.closeSocketListeners(sfd)
 			return err
 		}
-		_ = AnetNonBlock(sfd.fd[sfd.count])
-		_ = AnetCloexec(sfd.fd[sfd.count])
+		_ = anetNonBlock(sfd.fd[sfd.count])
+		_ = anetCloexec(sfd.fd[sfd.count])
 		sfd.count++
 	}
 	return nil

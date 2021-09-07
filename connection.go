@@ -1,7 +1,8 @@
 package main
 
 import (
-	"fmt"
+	"github.com/pengdafu/redis-golang/pkg"
+	"syscall"
 	"time"
 )
 
@@ -14,12 +15,17 @@ const (
 	CONN_STATE_ERROR
 )
 
+const (
+	CONN_FLAG_CLOSE_SCHEDULED = 1 << iota
+	CONN_FLAG_WRITE_BARRIER
+)
+
 type Connection struct {
 	Type         *ConnectionType
 	State        int
 	Flags        int //short int
 	Refs         int // short int
-	LastErrNo    int
+	LastErr      error
 	PrivateData  interface{}
 	ConnHandler  ConnectionCallbackFunc
 	WriteHandler ConnectionCallbackFunc
@@ -31,7 +37,7 @@ type ConnectionCallbackFunc func(conn *Connection)
 type ConnectionType struct {
 	AeHandle        func(el *AeEventLoop, fd int, clientData interface{}, mask int)
 	Connect         func(conn *Connection, addr string, port int, sourceAddr string, connectHandler ConnectionCallbackFunc)
-	Write           func(conn *Connection, data interface{}, dataLen int)
+	Write           func(conn *Connection, data string) error
 	Read            func(conn *Connection, buf interface{}, bufLen int)
 	Close           func(conn *Connection)
 	Accept          func(conn *Connection, acceptHandler ConnectionCallbackFunc)
@@ -45,14 +51,14 @@ type ConnectionType struct {
 	GetType         func(conn *Connection)
 }
 
-func ConnCreateAcceptedSocket(cfd int, CT_Socket *ConnectionType) *Connection {
-	conn := connCreateSocket(CT_Socket)
+func ConnCreateAcceptedSocket(cfd int) *Connection {
+	conn := connCreateSocket()
 	conn.Fd = cfd
 	conn.State = CONN_STATE_ACCEPTING
 	return conn
 }
 
-func connCreateSocket(CT_Socket *ConnectionType) *Connection {
+func connCreateSocket() *Connection {
 	conn := new(Connection)
 	conn.Fd = -1
 	conn.Type = CT_Socket
@@ -64,7 +70,7 @@ func (c *Connection) GetState() int {
 }
 
 func GetLastErr(conn *Connection) error {
-	return fmt.Errorf("error: %d", conn.LastErrNo)
+	return conn.LastErr
 }
 
 func (c *Connection) ConnGetLastError() error {
@@ -81,7 +87,7 @@ func init() {
 	CT_Socket = &ConnectionType{
 		AeHandle:        connSocketEventHandler,
 		Connect:         nil,
-		Write:           nil,
+		Write:           connSocketWrite,
 		Read:            nil,
 		Close:           connSocketClose,
 		Accept:          nil,
@@ -102,6 +108,53 @@ func connSocketEventHandler(el *AeEventLoop, fd int, clientData interface{}, mas
 
 func connSocketClose(conn *Connection) {
 	if conn.Fd != -1 {
-
+		server.el.AeDeleteFileEvent(conn.Fd, AE_READABLE|AE_WRITEABLE)
+		syscall.Close(conn.Fd)
+		conn.Fd = -1
 	}
+
+	if connHasRef(conn) {
+		conn.Flags |= CONN_FLAG_CLOSE_SCHEDULED
+		return
+	}
+
+	conn = nil
+}
+
+func connHasRef(conn *Connection) bool {
+	return conn.Refs == 0
+}
+
+func connClose(conn *Connection) {
+	conn.Type.Close(conn)
+}
+
+func connWrite(conn *Connection, data string) error {
+	return conn.Type.Write(conn, data)
+}
+
+func connNonBlock(conn *Connection) error {
+	if conn.Fd == -1 {
+		return C_ERR
+	}
+	return anetNonBlock(conn.Fd)
+}
+
+func connEnableTcpNoDelay(conn *Connection) error {
+	if conn.Fd == -1 {
+		return C_ERR
+	}
+	return anetEnableTcpNoDelay(conn.Fd)
+}
+
+func connSocketWrite(conn *Connection, data string) error {
+	_, err := syscall.Write(conn.Fd, pkg.String2Bytes(data))
+	if err != nil {
+		conn.LastErr = err
+
+		if conn.State == CONN_STATE_CONNECTED {
+			conn.State = CONN_STATE_ERROR
+		}
+	}
+	return err
 }
