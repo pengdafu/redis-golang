@@ -39,7 +39,7 @@ func aeApiPoll(el *AeEventLoop, tvp *TimeVal) (numevents int) {
 	} else {
 		n, err := syscall.Kevent(state.KqFd, nil, state.Events, &syscall.Timespec{
 			Sec:  int64(tvp.Duration / time.Second),
-			Nsec: int64(tvp.Duration / time.Nanosecond),
+			Nsec: int64((tvp.Duration % time.Second) / time.Nanosecond),
 		})
 		if err != nil {
 			return 0

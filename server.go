@@ -42,6 +42,37 @@ type RedisServer struct {
 var server *RedisServer
 
 type Client struct {
+	id              uint64 // 自增唯一ID
+	conn            *Connection
+	resp            int // resp 协议版本，可以是2或者3
+	db              []*redisDb
+	name            *robj // 客户端名字，通过SETNAME设置
+	querybuf        sds   // 缓存客户端请求的buf
+	qbPos           int   // querybuf 读到的位置
+	pendingQueryBuf sds   // 如果此客户端被标记为主服务器，则此缓冲区表示从主服务器接收的复制流中尚未应用的部分。
+
+	querybufPeak int           // 最近100ms或者更长时间querybuf的峰值
+	argc         int           // 当前command有多少个参数
+	argv         []*robj       // 当前command的参数列表
+	originalArgc int           // 如果参数被重写，原始参数的个数
+	originalArgv []*robj       // 如果参数被重写，原始的参数列表
+	argvLenSum   int           // len(argv)
+	cmd, lastCmd *redisCommand // 最后一次执行的command
+	user         *user
+
+
+}
+type redisDb struct {
+	// todo redisDb
+}
+type robj = redisObject
+type redisObject struct {
+	// todo redisObject
+
+}
+type redisCommand struct {
+}
+type user struct {
 }
 
 func New() *RedisServer {
