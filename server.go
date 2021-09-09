@@ -58,8 +58,9 @@ type Client struct {
 	originalArgv []*robj       // 如果参数被重写，原始的参数列表
 	argvLenSum   int           // len(argv)
 	cmd, lastCmd *redisCommand // 最后一次执行的command
-	user         *user
+	user         *user         // user与connect关联，如果为nil，则代表是admin，可以做任何操作
 
+	reqType int // request protocol type: PROTO_REQ_*
 
 }
 type redisDb struct {
