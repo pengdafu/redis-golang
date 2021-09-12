@@ -6,12 +6,14 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 )
 
 const (
 	CONFIG_MIN_RESERVED_FDS = 32
 	CONFIG_FDSET_INCR       = CONFIG_MIN_RESERVED_FDS + 96
 	CONFIG_BINDADDR_MAX     = 16
+	CONFIG_RUN_ID_SIZE      = 40
 )
 
 var (
@@ -60,8 +62,42 @@ type Client struct {
 	cmd, lastCmd *redisCommand // 最后一次执行的command
 	user         *user         // user与connect关联，如果为nil，则代表是admin，可以做任何操作
 
-	reqType int // request protocol type: PROTO_REQ_*
-
+	reqType                  int // request protocol type: PROTO_REQ_*
+	multiBulkLen             int // 要读取的多个批量参数的数量
+	bulkLen                  int // 批量请求的参数长度
+	reply                    *list
+	replyBytes               uint64        // 要响应的字节长度
+	sentLen                  uint64        // 当前缓冲区或者正在发送中的对象已经发送的字节数
+	ctime                    time.Duration // 客户端创建时间
+	duration                 int64         // 当前command的运行时间，用来阻塞或非阻塞命令的延迟
+	lastInteraction          time.Duration // 上次交互时间，用于超时
+	obufSoftLimitReachedTime time.Duration
+	flags                    int                          // 客户端的flag，CLIENT_* 宏定义
+	authenticated            bool                         // 当默认用户需要认证
+	replState                int                          // 如果client是一个从节点，则为从节点的复制状态
+	replPutOnlineOnAck       int                          // 在第一个ACK的时候，安装从节点的写处理器
+	replDBFd                 int                          // 复制database 的文件描述符
+	replDBOff                int                          // 复制database的文件的偏移
+	replDBSize               int                          // 复制db的文件的大小
+	replPreamble             int                          // 复制DB序言
+	readReplOff              int                          // Read replication offset if this is a master
+	replOff                  int                          // Applied replication offset if this is a master
+	replAckOff               int                          // Replication ack offset, if this is a slave
+	replAckTime              int                          // Replication ack time, if this is a slave
+	psyncInitialOffset       int                          // FULLRESYNC reply offset other slaves copying this slave output buffer should use.
+	replId                   [CONFIG_RUN_ID_SIZE + 1]byte // 主复制Id，如果是主节点
+	slaveListeningPort       int                          // As configured with: REPLCONF listening-port
+	slaveAddr                string                       // Optionally given by REPLCONF ip-address
+	slaveCapa                int                          // 从节点容量：SLAVE_CAPA_* bitwise OR
+	mstate                   multiState                   // MULTI/EXEC state
+	bType                    int                          // 如果是CLIENT_BLOCKED类型，表示阻塞
+	bpop                     blockingState                // blocking state
+	woff                     int                          // 最后一次写的全局复制偏移量
+	watchedKeys              *list                        // Keys WATCHED for MULTI/EXEC CAS
+	pubSubChannels           *dict                        // 客户端关注的渠道(SUBSCRIBE)
+	pubSubPatterns           *list                        // 客户端关注的模式(SUBSCRIBE)
+	peerId                   sds                          // Cached peer ID
+	sockName                 sds                          // Cached connection target address.
 }
 type redisDb struct {
 	// todo redisDb
@@ -74,6 +110,10 @@ type redisObject struct {
 type redisCommand struct {
 }
 type user struct {
+}
+type multiState struct {
+}
+type blockingState struct {
 }
 
 func New() *RedisServer {
