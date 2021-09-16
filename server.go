@@ -17,6 +17,59 @@ const (
 	PROTO_REPLY_CHUNK_BYTES = 16 * 1024
 )
 
+const (
+	USER_FLAG_ENABLED = 1 << iota
+	USER_FLAG_DISABLED
+	USER_FLAG_ALLKEYS
+	USER_FLAG_ALLCOMMANDS
+	USER_FLAG_NOPASS
+	USER_FLAG_ALLCHANNELS
+	USER_FLAG_SANITIZE_PAYLOAD
+	USER_FLAG_SANITIZE_PAYLOAD_SKIP
+)
+
+const (
+	REPL_STATE_NONE = iota
+	REPL_STATE_CONNECT
+	REPL_STATE_CONNECTING
+	REPL_STATE_RECEIVE_PING_REPLY
+	REPL_STATE_SEND_HANDSHAKE
+	REPL_STATE_RECEIVE_AUTH_REPLY
+	REPL_STATE_RECEIVE_PORT_REPLY
+	REPL_STATE_RECEIVE_IP_REPLY
+	REPL_STATE_RECEIVE_CAPA_REPLY
+	REPL_STATE_SEND_PSYNC
+	REPL_STATE_RECEIVE_PSYNC_REPLY
+	REPL_STATE_TRANSFER
+	REPL_STATE_CONNECTED
+)
+
+const (
+	SLAVE_CAPA_NONE = 0
+	SLAVE_CAPA_EOF  = 1 << iota
+	SLAVE_CAPA_PSYNC2
+)
+
+const (
+	BLOCKED_NONE = iota
+	BLOCKED_LIST
+	BLOCKED_WAIT
+	BLOCKED_MODULE
+	BLOCKED_STREAM
+	BLOCKED_ZSET
+	BLOCKED_PAUSE
+	BLOCKED_NUM
+)
+
+const (
+	CLIENT_TYPE_NORMAL = iota
+	CLIENT_TYPE_SLAVE
+	CLIENT_TYPE_PUBSUB
+	CLIENT_TYPE_MASTER
+	CLIENT_TYPE_COUNT
+	CLIENT_TYPE_OBUF_COUNT = 3
+)
+
 var (
 	C_OK  error = nil
 	C_ERR error = errors.New("error")
@@ -48,6 +101,10 @@ type RedisServer struct {
 	statRejectedConn uint64
 	tcpKeepalive     int
 	maxclients       int
+
+	dbnum        int
+	db           []*redisDb
+	nextClientId uint64
 }
 
 var server *RedisServer
@@ -56,7 +113,7 @@ type Client struct {
 	id              uint64 // 自增唯一ID
 	conn            *Connection
 	resp            int // resp 协议版本，可以是2或者3
-	db              []*redisDb
+	db              *redisDb
 	name            *robj // 客户端名字，通过SETNAME设置
 	querybuf        sds   // 缓存客户端请求的buf
 	qbPos           int   // querybuf 读到的位置
@@ -131,10 +188,27 @@ type redisObject struct {
 type redisCommand struct {
 }
 type user struct {
+	flags uint64
 }
 type multiState struct {
 }
 type blockingState struct {
+	timeout time.Duration
+	keys    *dict
+	target  *robj
+	listPos struct {
+		wherefrom int
+		whereto   int
+	}
+
+	xReadCount      int
+	xReadGroup      *robj
+	xReadConsumer   *robj
+	xReadGroupNoAck int
+
+	numReplicas         int
+	replOffset          uint
+	moduleBlockedHandle interface{}
 }
 
 func New() *RedisServer {

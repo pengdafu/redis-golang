@@ -41,7 +41,7 @@ type ConnectionType struct {
 	Write           func(conn *Connection, data string) error
 	Read            func(conn *Connection, buf interface{}, bufLen int)
 	Close           func(conn *Connection)
-	Accept          func(conn *Connection, acceptHandler ConnectionCallbackFunc)
+	Accept          func(conn *Connection, acceptHandler ConnectionCallbackFunc) error
 	SetWriteHandler func(conn *Connection, handler ConnectionCallbackFunc, barrier int)
 	SetReadHandler  func(conn *Connection, handler ConnectionCallbackFunc)
 	GetLastError    func(conn *Connection) error
@@ -52,7 +52,7 @@ type ConnectionType struct {
 	GetType         func(conn *Connection)
 }
 
-func ConnCreateAcceptedSocket(cfd int) *Connection {
+func connCreateAcceptedSocket(cfd int) *Connection {
 	conn := connCreateSocket()
 	conn.Fd = cfd
 	conn.State = CONN_STATE_ACCEPTING
@@ -173,4 +173,12 @@ func connSetPrivateData(conn *Connection, data interface{}) {
 
 func connSetReadhanler(conn *Connection, fc ConnectionCallbackFunc) {
 	conn.Type.SetReadHandler(conn, fc)
+}
+
+func connAccept(conn *Connection, acceptHandler ConnectionCallbackFunc) error {
+	return conn.Type.Accept(conn, acceptHandler)
+}
+
+func connSocketAccept(conn *Connection, acceptHandler ConnectionCallbackFunc) error {
+	return nil
 }

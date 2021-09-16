@@ -2,6 +2,8 @@ package main
 
 import (
 	"log"
+	"sync/atomic"
+	"time"
 )
 
 const (
@@ -21,7 +23,7 @@ func acceptTcpHandler(el *AeEventLoop, fd int, privdata interface{}, mask int) {
 		}
 		_ = anetCloexec(cfd)
 		log.Printf("Accepting %s:%d ", cip, port)
-		acceptCommonHandler(ConnCreateAcceptedSocket(cfd), 0, cip)
+		acceptCommonHandler(connCreateAcceptedSocket(cfd), 0, cip)
 	}
 }
 
@@ -53,11 +55,15 @@ func acceptCommonHandler(conn *Connection, flags int, ip string) {
 	}
 
 	// todo client
+	c.flags |= flags
 
+	if err := connAccept(conn, clientAcceptHandler); err != nil {
+
+	}
 }
 
 func createClient(conn *Connection) *Client {
-	client := new(Client)
+	c := new(Client)
 
 	if conn != nil {
 		_ = connNonBlock(conn)
@@ -66,14 +72,100 @@ func createClient(conn *Connection) *Client {
 			_ = connKeepAlive(conn, server.tcpKeepalive)
 		}
 		connSetReadhanler(conn, readQueryFromClient)
-		connSetPrivateData(conn, client)
+		connSetPrivateData(conn, c)
 	}
 
-	// todo SelectDb()
-
-	return client
+	_ = selectDb(c, 0)
+	c.id = atomic.AddUint64(&server.nextClientId, 1)
+	c.resp = 2
+	c.conn = conn
+	c.name = nil
+	c.bufpos = 0
+	c.qbPos = 0
+	c.querybuf = sdsempty()
+	c.pendingQueryBuf = sdsempty()
+	c.querybufPeak = 0
+	c.reqType = 0
+	c.argc = 0
+	c.argv = nil
+	c.argvLenSum = 0
+	c.originalArgc = 0
+	c.originalArgv = nil
+	c.cmd, c.lastCmd = nil, nil
+	c.multiBulkLen = 0
+	c.bulkLen = -1
+	c.sentLen = 0
+	c.flags = 0
+	c.ctime = time.Duration(time.Now().Unix())
+	c.lastInteraction = c.ctime
+	clientSetDefaultAuth(c)
+	c.replState = REPL_STATE_NONE
+	c.replPutOnlineOnAck = 0
+	c.replOff = 0
+	c.readReplOff = 0
+	c.replAckOff = 0
+	c.replAckTime = 0
+	c.slaveListeningPort = 0
+	c.slaveAddr = ""
+	c.slaveCapa = SLAVE_CAPA_NONE
+	c.reply = listCreate()
+	c.replyBytes = 0
+	c.obufSoftLimitReachedTime = 0
+	listSetFreeMethod(c.reply, freeClientReplyValue)
+	listSetDupMethod(c.reply, dupClientReplyValue)
+	c.bType = BLOCKED_NONE
+	c.bpop.timeout = 0
+	c.bpop.keys = dictCreate(nil, nil)
+	c.bpop.target = nil
+	c.bpop.xReadGroup = nil
+	c.bpop.xReadConsumer = nil
+	c.bpop.xReadGroupNoAck = 0
+	c.bpop.numReplicas = 0
+	c.bpop.replOffset = 0
+	c.woff = 0
+	c.watchedKeys = listCreate()
+	c.pubSubChannels = dictCreate(nil, nil)
+	c.pubSubPatterns = listCreate()
+	c.peerId = nil
+	c.sockName = nil
+	c.clientListNode = nil
+	c.pausedListNode = nil
+	c.clientTrackingRedirection = 0
+	c.clientTrackingPrefixes = nil
+	c.clientCronLastMemoryUsage = 0
+	c.clientCronLastMemoryType = CLIENT_TYPE_NORMAL
+	c.authCallback = nil
+	c.authCallbackPrivdata = nil
+	c.authModule = nil
+	listSetFreeMethod(c.pubSubPatterns, nil)
+	listSetDupMethod(c.pubSubPatterns, nil)
+	if conn != nil {
+		linkClient(c)
+	}
+	initClientMultiState(c)
+	return c
 }
 
 func readQueryFromClient(conn *Connection) {
+
+}
+
+func clientSetDefaultAuth(c *Client) {
+	c.user = DefaultUser
+	c.authenticated = c.user.flags&USER_FLAG_NOPASS != 0 && !(c.user.flags&USER_FLAG_DISABLED != 0)
+}
+
+func freeClientReplyValue(o interface{}) {
+
+}
+func dupClientReplyValue(o interface{}) interface{} {
+	return nil
+}
+
+func linkClient(c *Client) {
+
+}
+
+func clientAcceptHandler(conn *Connection) {
 
 }
