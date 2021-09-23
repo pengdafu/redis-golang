@@ -50,6 +50,7 @@ func acceptCommonHandler(conn *Connection, flags int, ip string) {
 
 	c := createClient(conn)
 	if c == nil {
+		log.Printf("Error registering fd event for the new client: %v (conn: todo)", GetLastErr(conn))
 		connClose(conn)
 		return
 	}
@@ -58,7 +59,8 @@ func acceptCommonHandler(conn *Connection, flags int, ip string) {
 	c.flags |= flags
 
 	if err := connAccept(conn, clientAcceptHandler); err != nil {
-
+		log.Printf("Error accepting a client connection: %v (conn: todo)", GetLastErr(conn))
+		return
 	}
 }
 
@@ -71,7 +73,7 @@ func createClient(conn *Connection) *Client {
 		if server.tcpKeepalive > 0 {
 			_ = connKeepAlive(conn, server.tcpKeepalive)
 		}
-		connSetReadhanler(conn, readQueryFromClient)
+		connSetReadHandler(conn, readQueryFromClient)
 		connSetPrivateData(conn, c)
 	}
 
@@ -146,6 +148,7 @@ func createClient(conn *Connection) *Client {
 	return c
 }
 
+// readQueryFromClient 解析输入
 func readQueryFromClient(conn *Connection) {
 
 }
@@ -167,5 +170,17 @@ func linkClient(c *Client) {
 }
 
 func clientAcceptHandler(conn *Connection) {
+	c := connGetPrivateData(conn).(*Client)
 
+	if connGetState(conn) != CONN_STATE_CONNECTED {
+		log.Printf("Error accepting a client connection: %s", GetLastErr(conn))
+		return
+	}
+
+	if server.protectedMode == 1 &&
+		server.bindAddrCount == 0 &&
+		DefaultUser.flags & USER_FLAG_NOPASS != 0 &&
+		c.flags & CLIENT_UNIX_SOCKET == 0 {
+
+	}
 }

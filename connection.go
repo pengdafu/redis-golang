@@ -91,7 +91,7 @@ func init() {
 		Write:           connSocketWrite,
 		Read:            nil,
 		Close:           connSocketClose,
-		Accept:          nil,
+		Accept:          connSocketAccept,
 		SetWriteHandler: nil,
 		SetReadHandler:  nil,
 		GetLastError:    GetLastErr,
@@ -171,14 +171,63 @@ func connSetPrivateData(conn *Connection, data interface{}) {
 	conn.PrivateData = data
 }
 
-func connSetReadhanler(conn *Connection, fc ConnectionCallbackFunc) {
+func connGetPrivateData(conn *Connection) interface{} {
+	return conn.PrivateData
+}
+
+func connSetReadHandler(conn *Connection, fc ConnectionCallbackFunc) {
 	conn.Type.SetReadHandler(conn, fc)
+}
+
+func connPeerToString(conn *Connection, port *int) string {
+	return anetFdToString()
 }
 
 func connAccept(conn *Connection, acceptHandler ConnectionCallbackFunc) error {
 	return conn.Type.Accept(conn, acceptHandler)
 }
 
+func connIncrRefs(conn *Connection) {
+	conn.Refs++
+}
+func connDecrRefs(conn *Connection) {
+	conn.Refs--
+}
+
+// callHandler 用于连接去实现调用处理器
+// 1. 增加refs保护这个连接
+// 2. 执行处理器(如果设置)
+// 3. 减少refs，并且如果refs==0，则关闭连接
+func callHandler(conn *Connection, handler ConnectionCallbackFunc) error {
+	connIncrRefs(conn)
+	if handler != nil {
+		handler(conn)
+	}
+	connDecrRefs(conn)
+	if conn.Flags&CONN_FLAG_CLOSE_SCHEDULED != 0 {
+		if !connHasRef(conn) {
+			connClose(conn)
+		}
+		return C_ERR
+	}
+	return C_OK
+}
+
 func connSocketAccept(conn *Connection, acceptHandler ConnectionCallbackFunc) error {
-	return nil
+	if conn.State != CONN_STATE_ACCEPTING {
+		return C_ERR
+	}
+
+	conn.State = CONN_STATE_CONNECTED
+
+	connIncrRefs(conn)
+	if err := callHandler(conn, acceptHandler); err != nil {
+		return err
+	}
+	connDecrRefs(conn)
+	return C_OK
+}
+
+func connGetState(conn *Connection) int {
+	return conn.State
 }
