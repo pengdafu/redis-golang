@@ -1,6 +1,10 @@
-package main
+//go:build darwin || freebsd
+
+package ae
 
 import (
+	"github.com/pengdafu/redis-golang/anet"
+	"github.com/pengdafu/redis-golang/util"
 	"syscall"
 	"time"
 )
@@ -10,7 +14,7 @@ type aeApiState struct {
 	Events []syscall.Kevent_t
 }
 
-func aeApiCreate(el *AeEventLoop) error {
+func aeApiCreate(el *EventLoop) error {
 	state := new(aeApiState)
 
 	state.Events = make([]syscall.Kevent_t, el.SetSize)
@@ -21,13 +25,13 @@ func aeApiCreate(el *AeEventLoop) error {
 	}
 	state.KqFd = kqfd
 
-	_ = anetCloexec(kqfd)
+	_ = anet.Cloexec(kqfd)
 	el.ApiData = state
 
 	return nil
 }
 
-func aeApiPoll(el *AeEventLoop, tvp *TimeVal) (numevents int) {
+func aeApiPoll(el *EventLoop, tvp *util.TimeVal) (numevents int) {
 	state := el.ApiData.(*aeApiState)
 
 	if tvp == nil {
@@ -53,10 +57,10 @@ func aeApiPoll(el *AeEventLoop, tvp *TimeVal) (numevents int) {
 			e := state.Events[i]
 
 			if e.Filter&syscall.EVFILT_WRITE != 0 {
-				mask |= AE_WRITEABLE
+				mask |= Writeable
 			}
 			if e.Filter&syscall.EVFILT_READ != 0 {
-				mask |= AE_READABLE
+				mask |= Readable
 			}
 
 			el.Fired[i].Fd = e.Ident
@@ -66,32 +70,32 @@ func aeApiPoll(el *AeEventLoop, tvp *TimeVal) (numevents int) {
 	return
 }
 
-func aeApiDelEvent(el *AeEventLoop, fd, mask int) {
+func aeApiDelEvent(el *EventLoop, fd, mask int) {
 	state := el.ApiData.(*aeApiState)
 
 	ke := syscall.Kevent_t{}
-	if mask&AE_READABLE != 0 {
+	if mask&Readable != 0 {
 		syscall.SetKevent(&ke, fd, syscall.EVFILT_READ, syscall.EV_DELETE)
 		_, _ = syscall.Kevent(state.KqFd, []syscall.Kevent_t{ke}, nil, nil)
 	}
-	if mask&AE_WRITEABLE != 0 {
+	if mask&Writeable != 0 {
 		syscall.SetKevent(&ke, fd, syscall.EVFILT_WRITE, syscall.EV_DELETE)
 		_, _ = syscall.Kevent(state.KqFd, []syscall.Kevent_t{ke}, nil, nil)
 	}
 }
 
-func aeApiAddEvent(el *AeEventLoop, fd, mask int) error {
+func aeApiAddEvent(el *EventLoop, fd, mask int) error {
 	state := el.ApiData.(*aeApiState)
 
 	ke := syscall.Kevent_t{}
 
-	if mask&AE_READABLE != 0 {
+	if mask&Readable != 0 {
 		syscall.SetKevent(&ke, fd, syscall.EVFILT_READ, syscall.EV_ADD)
 		if _, err := syscall.Kevent(state.KqFd, []syscall.Kevent_t{ke}, nil, nil); err != nil {
 			return err
 		}
 	}
-	if mask&AE_WRITEABLE != 0 {
+	if mask&Writeable != 0 {
 		syscall.SetKevent(&ke, fd, syscall.EVFILT_WRITE, syscall.EV_ADD)
 		if _, err := syscall.Kevent(state.KqFd, []syscall.Kevent_t{ke}, nil, nil); err != nil {
 			return err

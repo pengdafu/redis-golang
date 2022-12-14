@@ -1,24 +1,25 @@
-package main
+package ae
 
 import (
 	"fmt"
+	"github.com/pengdafu/redis-golang/util"
 	"time"
 )
 
 const (
-	AE_NONE      = 0
-	AE_READABLE  = 1
-	AE_WRITEABLE = 2
-	AE_BARRIER   = 4
+	None      = 0
+	Readable  = 1
+	Writeable = 2
+	Barrier   = 4
 )
 
 const (
-	AE_FILE_EVENTS = 1 << iota
-	AE_TIME_EVENTS
-	AE_DONT_WAIT
-	AE_CALL_BEFORE_SLEEP
-	AE_CALL_AFTER_SLEEP
-	AE_ALL_EVENTS = AE_FILE_EVENTS | AE_TIME_EVENTS
+	FileEvents = 1 << iota
+	TimeEvents
+	DontWait
+	CallBeforeSleep
+	CallAfterSleep
+	AllEvents = FileEvents | TimeEvents
 )
 
 const (
@@ -26,8 +27,8 @@ const (
 	ERR = -1
 )
 
-type AeBeforeSleepProc func(eventLoop *AeEventLoop)
-type AeEventLoop struct {
+type BeforeSleepProc func(eventLoop *EventLoop)
+type EventLoop struct {
 	MaxFd           int // 多路复用io一次最多返回多少个事件的fd
 	SetSize         int
 	TimeEventNextId int64
@@ -36,16 +37,16 @@ type AeEventLoop struct {
 	TimeEventHead   *timeEvent
 	Stop            int
 	ApiData         interface{} // todo
-	BeforeSleep     AeBeforeSleepProc
-	AfterSleep      AeBeforeSleepProc
+	BeforeSleep     BeforeSleepProc
+	AfterSleep      BeforeSleepProc
 	Flags           int
 }
 
-type AeFileProc func(el *AeEventLoop, fd int, clientData interface{}, mask int)
+type FileProc func(el *EventLoop, fd int, clientData interface{}, mask int)
 type fileEvent struct {
-	Mask       int // AE_(AE_WRITEABLE|AE_READABLE|AE_BARRIER) 中的一种
-	RFileProc  AeFileProc
-	WFileProc  AeFileProc
+	Mask       int // AE_(Writeable|AE_READABLE|AE_BARRIER) 中的一种
+	RFileProc  FileProc
+	WFileProc  FileProc
 	ClientData interface{}
 }
 
@@ -54,12 +55,12 @@ type firedEvent struct {
 	Mask int
 }
 
-type AeTimeProc func(eventLoop *AeEventLoop, id uint64, clientData interface{}) int
-type aeEventFinalizerProc func(eventLoop *AeEventLoop, clientData interface{})
+type TimeProc func(eventLoop *EventLoop, id uint64, clientData interface{}) int
+type aeEventFinalizerProc func(eventLoop *EventLoop, clientData interface{})
 type timeEvent struct {
 	Id            int64
 	When          int64 // timestamp
-	TimeProc      AeTimeProc
+	TimeProc      TimeProc
 	FinalizerProc aeEventFinalizerProc
 	ClientData    interface{}
 	Prev          *timeEvent
@@ -67,8 +68,8 @@ type timeEvent struct {
 	RefCount      int // 在递归时间事件被调用时，refCount为了防止时间器事件被释放
 }
 
-func aeCreateEventLoop(setsize int) (*AeEventLoop, error) {
-	el := new(AeEventLoop)
+func CreateEventLoop(setsize int) (*EventLoop, error) {
+	el := new(EventLoop)
 
 	el.Events = make([]fileEvent, setsize, setsize)
 	el.Fired = make([]firedEvent, setsize, setsize)
@@ -87,23 +88,23 @@ func aeCreateEventLoop(setsize int) (*AeEventLoop, error) {
 	}
 
 	for i := 0; i < setsize; i++ {
-		el.Events[i].Mask = AE_NONE
+		el.Events[i].Mask = None
 	}
 
 	return el, nil
 }
 
-func (el *AeEventLoop) aeApiPoll(tvp *TimeVal) int {
+func (el *EventLoop) aeApiPoll(tvp *util.TimeVal) int {
 	return aeApiPoll(el, tvp)
 }
 
-func (el *AeEventLoop) aeCreateTimeEvent(milliseconds int64, proc AeTimeProc, clientData interface{}, finalizerProc aeEventFinalizerProc) int64 {
+func (el *EventLoop) CreateTimeEvent(milliseconds int64, proc TimeProc, clientData interface{}, finalizerProc aeEventFinalizerProc) int64 {
 	id := el.TimeEventNextId
 	el.TimeEventNextId++
 
 	te := new(timeEvent)
 	te.Id = id
-	te.When = getMonotonicUs() + milliseconds*1000
+	te.When = util.GetMonotonicUs() + milliseconds*1000
 	te.TimeProc = proc
 	te.FinalizerProc = finalizerProc
 	te.ClientData = clientData
@@ -119,25 +120,25 @@ func (el *AeEventLoop) aeCreateTimeEvent(milliseconds int64, proc AeTimeProc, cl
 	return id
 }
 
-func (el *AeEventLoop) aeDeleteFileEvent(fd, mask int) {
+func (el *EventLoop) AeDeleteFileEvent(fd, mask int) {
 	if fd >= el.SetSize {
 		return
 	}
 
 	fe := el.Events[fd]
-	if fe.Mask == AE_NONE {
+	if fe.Mask == None {
 		return
 	}
 
-	if mask&AE_WRITEABLE != 0 {
-		mask |= AE_BARRIER
+	if mask&Writeable != 0 {
+		mask |= Barrier
 	}
 
 	aeApiDelEvent(el, fd, mask)
 	fe.Mask = fe.Mask & (^mask)
-	if fd == el.MaxFd && fe.Mask == AE_NONE {
+	if fd == el.MaxFd && fe.Mask == None {
 		for i := el.MaxFd - 1; i >= 0; i-- {
-			if el.Events[i].Mask != AE_NONE {
+			if el.Events[i].Mask != None {
 				el.MaxFd = i
 				return
 			}
@@ -145,7 +146,7 @@ func (el *AeEventLoop) aeDeleteFileEvent(fd, mask int) {
 	}
 }
 
-func (el *AeEventLoop) aeCreateFileEvent(fd, mask int, proc AeFileProc, clientData interface{}) error {
+func (el *EventLoop) AeCreateFileEvent(fd, mask int, proc FileProc, clientData interface{}) error {
 	if fd >= el.SetSize {
 		return fmt.Errorf("fd out of range: %d", fd)
 	}
@@ -156,10 +157,10 @@ func (el *AeEventLoop) aeCreateFileEvent(fd, mask int, proc AeFileProc, clientDa
 	}
 
 	fe.Mask |= mask
-	if mask&AE_WRITEABLE != 0 {
+	if mask&Writeable != 0 {
 		fe.WFileProc = proc
 	}
-	if mask&AE_READABLE != 0 {
+	if mask&Readable != 0 {
 		fe.RFileProc = proc
 	}
 	fe.ClientData = clientData
@@ -169,52 +170,52 @@ func (el *AeEventLoop) aeCreateFileEvent(fd, mask int, proc AeFileProc, clientDa
 	return nil
 }
 
-func aeMain(el *AeEventLoop) {
+func (el *EventLoop) AeMain() {
 	el.Stop = 0
 	for el.Stop == 0 {
-		aeProcessEvent(el, AE_ALL_EVENTS|AE_CALL_BEFORE_SLEEP|AE_CALL_AFTER_SLEEP)
+		aeProcessEvent(el, AllEvents|CallBeforeSleep|CallAfterSleep)
 	}
 }
 
-func aeProcessEvent(el *AeEventLoop, flags int) (processed int) {
+func aeProcessEvent(el *EventLoop, flags int) (processed int) {
 	var numevents int
 
 	// 没有时间事件和文件(IO)事件，什么也不处理
-	if flags&AE_TIME_EVENTS == 0 && flags&AE_FILE_EVENTS == 0 {
+	if flags&TimeEvents == 0 && flags&FileEvents == 0 {
 		return
 	}
 
 	// 注意，只要我们处理时间事件以便于休眠到下一个时间事件触发，我们也应该要处理select() events，哪怕没有file events
 	// 要处理
-	if el.MaxFd != -1 || (flags&AE_TIME_EVENTS != 0 && flags&AE_DONT_WAIT == 0) {
-		timeVal := &TimeVal{}
+	if el.MaxFd != -1 || (flags&TimeEvents != 0 && flags&DontWait == 0) {
+		timeVal := &util.TimeVal{}
 		msUntilTimer := int64(-1)
 
-		if flags&AE_TIME_EVENTS != 0 && flags&AE_DONT_WAIT == 0 {
+		if flags&TimeEvents != 0 && flags&DontWait == 0 {
 			msUntilTimer = msUntilEarliestTimer(el)
 		}
 
 		if msUntilTimer > 0 {
 			timeVal.Duration = time.Millisecond * time.Duration(msUntilTimer)
 		} else {
-			if flags&AE_DONT_WAIT != 0 {
+			if flags&DontWait != 0 {
 				//timeVal.Duration = time.Second * 0
 			} else {
 				timeVal = nil
 			}
 		}
 
-		if el.Flags&AE_DONT_WAIT != 0 {
-			timeVal = &TimeVal{}
+		if el.Flags&DontWait != 0 {
+			timeVal = &util.TimeVal{}
 		}
 
-		if el.BeforeSleep != nil && flags&AE_CALL_BEFORE_SLEEP != 0 {
+		if el.BeforeSleep != nil && flags&CallBeforeSleep != 0 {
 			el.BeforeSleep(el)
 		}
 
 		numevents = el.aeApiPoll(timeVal)
 
-		if el.AfterSleep != nil && flags&AE_CALL_AFTER_SLEEP != 0 {
+		if el.AfterSleep != nil && flags&CallAfterSleep != 0 {
 			el.AfterSleep(el)
 		}
 
@@ -224,9 +225,9 @@ func aeProcessEvent(el *AeEventLoop, flags int) (processed int) {
 			mask := el.Fired[i].Mask
 			fired := 0
 
-			invert := fe.Mask & AE_BARRIER
+			invert := fe.Mask & Barrier
 
-			if invert == 0 && fe.Mask&mask&AE_READABLE != 0 {
+			if invert == 0 && fe.Mask&mask&Readable != 0 {
 				fe.RFileProc(el, int(fd), fe.ClientData, mask)
 				fired++
 				fe = el.Events[fd]
@@ -236,14 +237,14 @@ func aeProcessEvent(el *AeEventLoop, flags int) (processed int) {
 		}
 	}
 
-	if flags&AE_TIME_EVENTS != 0 {
+	if flags&TimeEvents != 0 {
 		processed += processTimeEvents(el)
 	}
 
 	return processed
 }
 
-func processTimeEvents(el *AeEventLoop) int {
+func processTimeEvents(el *EventLoop) int {
 	return 0
 }
 
@@ -253,7 +254,7 @@ func processTimeEvents(el *AeEventLoop) int {
 // 可能的优化点(Redis 暂时还不需要，但是...):
 //  1.插入事件的时候就排序，这样最近的时间事件就是head，这样虽然会更好，但是插入和删除变成了O(N)
 // 	2.使用跳表，这样获取变成了O(1)并且插入是O(log(N))
-func msUntilEarliestTimer(el *AeEventLoop) int64 {
+func msUntilEarliestTimer(el *EventLoop) int64 {
 	if el.TimeEventHead == nil {
 		return -1
 	}
@@ -266,7 +267,7 @@ func msUntilEarliestTimer(el *AeEventLoop) int64 {
 		}
 		te = te.Next
 	}
-	now := getMonotonicUs()
+	now := util.GetMonotonicUs()
 	if now >= earliest.When {
 		return 0
 	}

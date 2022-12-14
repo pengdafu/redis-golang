@@ -1,8 +1,8 @@
-package main
+package util
 
 import "time"
 
-func getMonotonicUs() int64 {
+func GetMonotonicUs() int64 {
 	return time.Now().UnixNano() / 1e3
 }
 

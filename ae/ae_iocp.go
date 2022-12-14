@@ -1,10 +1,12 @@
-package main
+//go:build windows
+
+package ae
 
 type aeApiState struct {
 }
 
-// todo windows select ???
-func aeApiCreate(el *AeEventLoop) error {
+// todo call what?
+func aeApiCreate(el *EventLoop) error {
 	state := new(aeApiState)
 
 	el.ApiData = state

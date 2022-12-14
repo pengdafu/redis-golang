@@ -1,8 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
+	"github.com/pengdafu/redis-golang/adlist"
+	"github.com/pengdafu/redis-golang/ae"
+	"github.com/pengdafu/redis-golang/anet"
+	"github.com/pengdafu/redis-golang/sds"
+	"github.com/pengdafu/redis-golang/util"
 	"log"
+	"strconv"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -10,18 +19,21 @@ const (
 	MAX_ACCEPTS_PER_CALL = 1000
 )
 
-func acceptTcpHandler(el *AeEventLoop, fd int, privdata interface{}, mask int) {
+func acceptTcpHandler(el *ae.EventLoop, fd int, privdata interface{}, mask int) {
 	max := MAX_ACCEPTS_PER_CALL
 	var cip string
 	var port int
 	for max > 0 {
 		max--
-		cfd, err := anetAccept(fd, &cip, &port)
+		cfd, err := anet.Accept(fd, &cip, &port)
 		if err != nil {
+			if err == syscall.EAGAIN {
+				return
+			}
 			log.Println("Accepting client connection:", err)
 			return
 		}
-		_ = anetCloexec(cfd)
+		_ = anet.Cloexec(cfd)
 		log.Printf("Accepting %s:%d ", cip, port)
 		acceptCommonHandler(connCreateAcceptedSocket(cfd), 0, cip)
 	}
@@ -60,6 +72,7 @@ func acceptCommonHandler(conn *Connection, flags int, ip string) {
 
 	if err := connAccept(conn, clientAcceptHandler); err != nil {
 		log.Printf("Error accepting a client connection: %v (conn: todo)", GetLastErr(conn))
+		freeClientAsync(c)
 		return
 	}
 }
@@ -84,8 +97,8 @@ func createClient(conn *Connection) *Client {
 	c.name = nil
 	c.bufpos = 0
 	c.qbPos = 0
-	c.querybuf = sdsempty()
-	c.pendingQueryBuf = sdsempty()
+	c.querybuf = sds.Empty()
+	c.pendingQueryBuf = sds.Empty()
 	c.querybufPeak = 0
 	c.reqType = 0
 	c.argc = 0
@@ -98,7 +111,7 @@ func createClient(conn *Connection) *Client {
 	c.bulkLen = -1
 	c.sentLen = 0
 	c.flags = 0
-	c.ctime = time.Duration(time.Now().Unix())
+	c.ctime = time.Now().Unix()
 	c.lastInteraction = c.ctime
 	clientSetDefaultAuth(c)
 	c.replState = REPL_STATE_NONE
@@ -110,11 +123,11 @@ func createClient(conn *Connection) *Client {
 	c.slaveListeningPort = 0
 	c.slaveAddr = ""
 	c.slaveCapa = SLAVE_CAPA_NONE
-	c.reply = listCreate()
+	c.reply = adlist.Create()
 	c.replyBytes = 0
 	c.obufSoftLimitReachedTime = 0
-	listSetFreeMethod(c.reply, freeClientReplyValue)
-	listSetDupMethod(c.reply, dupClientReplyValue)
+	c.reply.SetFreeMethod(freeClientReplyValue)
+	c.reply.SetDupMethod(dupClientReplyValue)
 	c.bType = BLOCKED_NONE
 	c.bpop.timeout = 0
 	c.bpop.keys = dictCreate(nil, nil)
@@ -125,11 +138,11 @@ func createClient(conn *Connection) *Client {
 	c.bpop.numReplicas = 0
 	c.bpop.replOffset = 0
 	c.woff = 0
-	c.watchedKeys = listCreate()
+	c.watchedKeys = adlist.Create()
 	c.pubSubChannels = dictCreate(nil, nil)
-	c.pubSubPatterns = listCreate()
-	c.peerId = nil
-	c.sockName = nil
+	c.pubSubPatterns = adlist.Create()
+	c.peerId = sds.Empty()
+	c.sockName = sds.Empty()
 	c.clientListNode = nil
 	c.pausedListNode = nil
 	c.clientTrackingRedirection = 0
@@ -139,8 +152,8 @@ func createClient(conn *Connection) *Client {
 	c.authCallback = nil
 	c.authCallbackPrivdata = nil
 	c.authModule = nil
-	listSetFreeMethod(c.pubSubPatterns, nil)
-	listSetDupMethod(c.pubSubPatterns, nil)
+	c.pubSubPatterns.SetFreeMethod(nil)
+	c.pubSubPatterns.SetDupMethod(nil)
 	if conn != nil {
 		linkClient(c)
 	}
@@ -150,7 +163,341 @@ func createClient(conn *Connection) *Client {
 
 // readQueryFromClient 解析输入
 func readQueryFromClient(conn *Connection) {
+	c := connGetPrivateData(conn).(*Client)
+	var readLen, qblen int
 
+	if postponeClientRead(c) {
+		return
+	}
+
+	server.statTotalReadsProcessed++
+
+	readLen = PROTO_REPLY_CHUNK_BYTES
+
+	if c.reqType == PROTO_REQ_MULTIBULK && c.multiBulkLen > 0 && c.bulkLen != -1 &&
+		c.bulkLen >= PROTO_MBULK_BIG_ARG {
+		remaining := (c.bulkLen + 2) - sds.Len(c.querybuf)
+		if remaining > 0 && remaining < readLen {
+			readLen = remaining
+		}
+	}
+
+	qblen = sds.Len(c.querybuf)
+	if c.querybufPeak < qblen {
+		c.querybufPeak = qblen
+	}
+
+	c.querybuf = sds.MakeRoomFor(c.querybuf, readLen)
+	nread, err := connRead(c.conn, c.querybuf.Offset(qblen), readLen)
+	if nread < 0 {
+		return
+	}
+	if err != nil {
+		if connGetState(conn) == CONN_STATE_CONNECTED {
+			return
+		} else {
+			log.Printf("Reading from client: %v\n", conn.LastErr)
+			freeClientAsync(c)
+			return
+		}
+	} else if nread == 0 {
+		log.Println("Client closed connection")
+		freeClientAsync(c)
+		return
+	} else if c.flags&CLIENT_MASTER > 0 {
+		// todo master pengding query buf
+	}
+
+	sds.IncrLen(c.querybuf, nread)
+	c.lastInteraction = server.unixtime
+	if c.flags&CLIENT_MASTER > 0 {
+		c.readReplOff += nread
+	}
+	if sds.Len(c.querybuf) > server.clientMaxQueryBufLen {
+		// todo overflow clientMaxQueryBufLen
+		connWrite(conn, fmt.Sprintf("query buf len overflow: %d, curLen: %d", server.clientMaxQueryBufLen, sds.Len(c.querybuf)))
+		freeClientAsync(c)
+		return
+	}
+
+	processInputBuffer(c)
+}
+
+func processInputBuffer(c *Client) {
+	// start parse
+	for c.qbPos < sds.Len(c.querybuf) {
+		// 客户端暂停了
+		if c.flags&CLIENT_SLAVE == 0 && c.flags&CLIENT_PENDING_READ == 0 && clientsArePaused() {
+			break
+		}
+
+		// 如果客户端正在进行其它操作，终止
+		if c.flags&CLIENT_BLOCKED > 0 {
+			break
+		}
+
+		// 如果已经有待处理的命令，则暂时不解析
+		if c.flags&CLIENT_PENDING_COMMAND > 0 {
+			break
+		}
+
+		if server.luaTimeout > 0 && c.flags&CLIENT_MASTER > 0 {
+			break
+		}
+
+		if c.flags&(CLIENT_CLOSE_AFTER_REPLY|CLIENT_CLOSE_ASAP) > 0 {
+			break
+		}
+
+		if c.reqType == 0 {
+			if c.querybuf.Offset(c.qbPos)[0] == '*' {
+				c.reqType = PROTO_REQ_MULTIBULK
+			} else {
+				c.reqType = PROTO_REQ_INLINE
+			}
+		}
+
+		if c.reqType == PROTO_REQ_INLINE {
+			if processInlineBuffer(c) != C_OK {
+				break
+			}
+
+			// todo gopher mode?
+		} else if c.reqType == PROTO_REQ_MULTIBULK {
+			if processMultibulkBuffer(c) != C_OK {
+				break
+			}
+		} else {
+			panic("Unknown request type")
+		}
+
+		if c.argc == 0 {
+			resetClient(c)
+		} else {
+			// 如果处于IO线程的上下文中，不处理命令
+			if c.flags&CLIENT_PENDING_READ > 0 {
+				c.flags |= CLIENT_PENDING_COMMAND
+				break
+			}
+
+			if processCommandAndResetClient(c) == C_ERR {
+				return
+			}
+		}
+	}
+	if c.qbPos > 0 {
+		sds.Range(c.querybuf, c.qbPos, -1)
+		c.qbPos = 0
+	}
+}
+
+func processInlineBuffer(c *Client) error {
+	newLineIdx := bytes.IndexByte(c.querybuf.Offset(c.qbPos), '\n')
+	lineFeedChars := 1
+	if newLineIdx == -1 {
+		if sds.Len(c.querybuf)-c.qbPos > PROTO_INLINE_MAX_SIZE {
+			addReplyError(c, "Protocol error: too big inline request")
+			setProtocolError("too big inline request", c)
+		}
+		return C_ERR
+	}
+
+	newline := c.querybuf.Offset(c.qbPos)[:newLineIdx+1]
+	if len(newline) > 0 && c.querybuf.Offset(c.qbPos)[0] != newline[0] && newline[len(newline)-1] == '\r' {
+		newline = newline[:len(newline)-1]
+		lineFeedChars++
+	}
+
+	queryLen := len(newline)
+	aux := sds.NewLen(util.Bytes2String(newline))
+	argv, argc := sds.SplitArgs(aux)
+	if len(argv) == 0 {
+		addReplyError(c, "Protocol error: unbalanced quotes in request")
+		setProtocolError("unbalanced quotes in inline request", c)
+		return C_ERR
+	}
+
+	if queryLen == 0 && getClientType(c) == CLIENT_TYPE_SLAVE {
+		c.replAckTime = server.unixtime
+	}
+
+	if queryLen != 0 && c.flags&CLIENT_MASTER > 0 {
+		//sdsFreeSlipRes()
+		log.Println("WARNING: Receiving inline protocol from master, master stream corruption? Closing the master connection and discarding the cached master.")
+		setProtocolError("Master using the inline protocol. Desync?", c)
+		return C_ERR
+	}
+
+	c.qbPos += queryLen /* + lineFeedChars */
+	if argc > 0 {
+		//if (c->argv) zfree(c->argv);
+		//c->argv = zmalloc(sizeof(robj*)*argc);
+		//c->argv_len_sum = 0;
+		c.argvLenSum = 0
+		c.argv = make([]*robj, argc)
+		c.argc = 0
+	}
+	for i := 0; i < argc; i++ {
+		c.argv[c.argc] = createObject(ObjString, argv[i])
+		c.argc++
+		c.argvLenSum += sds.Len(argv[i])
+	}
+
+	return C_OK
+}
+
+func processMultibulkBuffer(c *Client) error {
+	if c.multiBulkLen == 0 {
+		newLineIdx := bytes.IndexByte(c.querybuf.Offset(c.qbPos), '\r')
+		if newLineIdx == -1 {
+			if sds.Len(c.querybuf) > PROTO_INLINE_MAX_SIZE {
+				addReplyError(c, "Protocol error: too big mbulk count string")
+				setProtocolError("too big mbulk count string", c)
+			}
+			return C_ERR
+		}
+
+		/* Buffer should also contain \n */
+		//if (newline-(c->querybuf+c->qb_pos) > (ssize_t)(sdslen(c->querybuf)-c->qb_pos-2))
+		//return C_ERR;
+		ll, err := strconv.ParseInt(util.Bytes2String(c.querybuf.Offset(c.qbPos)[1:newLineIdx]), 10, 64)
+		if err != nil || ll > 1024*1024 {
+			addReplyError(c, fmt.Sprintf("Protocol error: invalid multibulk length: %v, len: %d", err, ll))
+			setProtocolError("invalid mbulk count", c)
+			return C_ERR
+		} else if ll > 10 && authRequired(c) {
+			addReplyError(c, "Protocol error: unauthenticated multibulk length")
+			setProtocolError("unauth mbulk count", c)
+			return C_ERR
+		}
+
+		c.qbPos += newLineIdx + 2
+		if ll <= 0 {
+			return C_OK
+		}
+		c.multiBulkLen = int(ll)
+		c.argv = make([]*robj, ll)
+		c.argvLenSum = 0
+	}
+
+	for c.multiBulkLen > 0 {
+		if c.bulkLen == -1 {
+			newLineIdx := bytes.IndexByte(c.querybuf.Offset(c.qbPos), '\r')
+			if newLineIdx == -1 {
+				if sds.Len(c.querybuf) > PROTO_INLINE_MAX_SIZE {
+					addReplyError(c, "Protocol error: too big bulk count string")
+					setProtocolError("too big bulk count string", c)
+					return C_ERR
+				}
+				break
+			}
+
+			if c.querybuf.Offset(c.qbPos)[0] != '$' {
+				addReplyErrorFormat(c,
+					"Protocol error: expected '$', got '%c'",
+					c.querybuf.Offset(c.qbPos)[0])
+				setProtocolError("expected $ but got something else", c)
+				return C_ERR
+			}
+
+			ll, err := strconv.ParseInt(util.Bytes2String(c.querybuf.Offset(c.qbPos)[1:newLineIdx]), 10, 64)
+			if err != nil || ll < 0 || (c.flags&CLIENT_MASTER == 0 &&
+				ll > server.protoMaxBulkLen) {
+				addReplyError(c, "Protocol error: invalid bulk length")
+				setProtocolError("invalid bulk length", c)
+				return C_ERR
+			} else if ll > 16384 && authRequired(c) {
+				addReplyError(c, "Protocol error: unauthenticated bulk length")
+				setProtocolError("unauth bulk length", c)
+				return C_ERR
+			}
+
+			c.qbPos += newLineIdx + 2
+			if ll >= PROTO_MBULK_BIG_ARG {
+				if sds.Len(c.querybuf)-c.qbPos <= int(ll)+2 {
+					sds.Range(c.querybuf, c.qbPos, -1)
+					c.qbPos = 0
+					c.querybuf = sds.MakeRoomFor(c.querybuf, int(ll)+2-sds.Len(c.querybuf))
+				}
+			}
+			c.bulkLen = int(ll)
+		}
+
+		if sds.Len(c.querybuf)-c.qbPos < c.bulkLen+2 {
+			break // 数据不够
+		} else {
+			if c.qbPos == 0 && c.bulkLen >= PROTO_MBULK_BIG_ARG &&
+				sds.Len(c.querybuf) == c.bulkLen+2 {
+				c.argv[c.argc] = createObject(ObjString, c.querybuf)
+				c.argc++
+				c.argvLenSum += c.bulkLen
+				sds.IncrLen(c.querybuf, -2) // crlf
+
+				c.querybuf = sds.NewLen(util.Bytes2String(make([]byte, c.bulkLen+2)))
+				sds.Clear(c.querybuf)
+			} else {
+				c.argv[c.argc] = createStringObject(util.Bytes2String(c.querybuf.Offset(c.qbPos)[:c.bulkLen]))
+				c.argc++
+				c.argvLenSum += c.bulkLen
+				c.qbPos += c.bulkLen + 2
+			}
+			c.bulkLen = -1
+			c.multiBulkLen--
+		}
+	}
+	if c.multiBulkLen == 0 {
+		return C_OK
+	}
+	return C_ERR
+}
+
+func processCommandAndResetClient(c *Client) error {
+	var deadClient error = C_OK
+	server.currentClient = c
+	if processCommand(c) == C_OK {
+		commandProcessed(c)
+	}
+
+	if server.currentClient == nil {
+		deadClient = C_ERR
+	}
+	server.currentClient = nil
+	return deadClient
+}
+
+func commandProcessed(c *Client) {
+
+}
+
+func authRequired(c *Client) bool {
+	return (DefaultUser.flags&USER_FLAG_NOPASS == 0 || DefaultUser.flags&USER_FLAG_DISABLED > 0) &&
+		!c.authenticated
+}
+
+func getClientType(c *Client) int {
+	if c.flags&CLIENT_MASTER > 0 {
+		return CLIENT_TYPE_MASTER
+	}
+
+	if c.flags&CLIENT_SLAVE > 0 && c.flags&CLIENT_MONITOR == 0 {
+		return CLIENT_TYPE_SLAVE
+	}
+
+	if c.flags&CLIENT_PUBSUB > 0 {
+		return CLIENT_TYPE_PUBSUB
+	}
+
+	return CLIENT_TYPE_NORMAL
+}
+
+// resetClient todo
+func resetClient(c *Client) {
+
+}
+
+// clientsArePaused todo
+func clientsArePaused() bool {
+	return false
 }
 
 func clientSetDefaultAuth(c *Client) {
@@ -159,6 +506,9 @@ func clientSetDefaultAuth(c *Client) {
 }
 
 func freeClientReplyValue(o interface{}) {
+
+}
+func freeClientAsync(c *Client) {
 
 }
 func dupClientReplyValue(o interface{}) interface{} {
@@ -174,13 +524,192 @@ func clientAcceptHandler(conn *Connection) {
 
 	if connGetState(conn) != CONN_STATE_CONNECTED {
 		log.Printf("Error accepting a client connection: %s", GetLastErr(conn))
+		freeClientAsync(c)
 		return
 	}
 
 	if server.protectedMode == 1 &&
 		server.bindAddrCount == 0 &&
-		DefaultUser.flags & USER_FLAG_NOPASS != 0 &&
-		c.flags & CLIENT_UNIX_SOCKET == 0 {
+		DefaultUser.flags&USER_FLAG_NOPASS != 0 &&
+		c.flags&CLIENT_UNIX_SOCKET == 0 {
+		cip := connPeerToString(conn, nil, anet.FdToPeerName)
 
+		if cip != "127.0.0.1" && cip != "::1" {
+			const errMsg = `
+-DENIED Redis is running in protected mode because protected 
+mode is enabled, no bind address was specified, no 
+authentication password is requested to clients. In this mode 
+connections are only accepted from the loopback interface. 
+If you want to connect from external computers to Redis you 
+may adopt one of the following solutions: 
+1) Just disable protected mode sending the command 
+'CONFIG SET protected-mode no' from the loopback interface 
+by connecting to Redis from the same host the server is 
+running, however MAKE SURE Redis is not publicly accessible 
+from internet if you do so. Use CONFIG REWRITE to make this 
+change permanent. 
+2) Alternatively you can just disable the protected mode by 
+editing the Redis configuration file, and setting the protected 
+mode option to 'no', and then restarting the server. 
+3) If you started the server manually just for testing, restart 
+it with the '--protected-mode no' option. 
+4) Setup a bind address or an authentication password. 
+NOTE: You only need to do one of the above things in order for 
+the server to start accepting connections from the outside.
+`
+			connWrite(c.conn, errMsg)
+			server.statRejectedConn++
+			freeClientAsync(c)
+			return
+		}
 	}
+
+	server.statNumConnections++
+}
+
+/**
+postponeClientRead
+当我们想要通过线程IO去延迟读取客户端数据时返回true
+一般由eventLoop驱动readHandler调用此函数，当此函数
+被调用时，客户端将被标记并放到待处理客户端列表中
+*/
+func postponeClientRead(c *Client) bool {
+	return false
+}
+
+func addReplyError(c *Client, err string) {
+	addReplyErrorLength(c, err)
+	afterErrorReply(c, err)
+}
+
+func addReplyErrorFormat(c *Client, format string, a ...any) {
+	err := fmt.Sprintf(format, a...)
+	addReplyErrorLength(c, err)
+	afterErrorReply(c, err)
+}
+
+func addReplyErrorLength(c *Client, err string) {
+	if len(err) == 0 || err[0] != '-' {
+		addReplyProto(c, "-ERR ")
+	}
+	addReplyProto(c, err)
+	addReplyProto(c, "\r\n")
+}
+
+func addReplyProto(c *Client, s string) {
+	if prepareClientToWrite(c) != C_OK {
+		return
+	}
+	if _addReplyToBuffer(c, s) != C_OK {
+		_addReplyProtoToList(c, s)
+	}
+}
+
+func _addReplyProtoToList(c *Client, s string) {
+	if c.flags&CLIENT_CLOSE_AFTER_REPLY > 0 {
+		return
+	}
+
+	sLen := len(s)
+
+	tail, ok := c.reply.Last().NodeValue().(*clientReplyBlock)
+	if ok {
+		avail := cap(tail.buf) - tail.used
+		copyLen := avail
+		if avail > sLen {
+			copyLen = sLen
+		}
+		copy(tail.buf[tail.used:], s)
+
+		tail.used += copyLen
+		s = s[copyLen:]
+		sLen = len(s)
+	}
+
+	if sLen > 0 {
+		alloc := sLen
+		if sLen < PROTO_REPLY_CHUNK_BYTES {
+			alloc = PROTO_REPLY_CHUNK_BYTES
+		}
+
+		tail = &clientReplyBlock{
+			used: 0,
+			buf:  make([]byte, alloc),
+		}
+
+		tail.used = sLen
+		copy(tail.buf, s)
+		c.reply.AddNodeTail(tail)
+		c.replyBytes += uint64(cap(tail.buf))
+	}
+
+	// asyncCloseClientOnOutputBufferLimitReached todo
+}
+
+// afterErrorReply todo
+func afterErrorReply(c *Client, err string) {
+
+}
+
+func _addReplyToBuffer(c *Client, s string) error {
+	available := len(c.buf) - c.bufpos
+
+	if c.flags&CLIENT_CLOSE_AFTER_REPLY > 0 {
+		return C_OK
+	}
+	if c.reply.Len() > 0 {
+		return C_ERR
+	}
+	if len(s) > available {
+		return C_ERR
+	}
+
+	copy(c.buf[c.bufpos:], s)
+	c.bufpos += len(s)
+	return C_OK
+}
+
+func prepareClientToWrite(c *Client) error {
+	if c.flags&(CLIENT_LUA|CLIENT_MODULE) > 0 {
+		return C_OK
+	}
+
+	if c.flags&CLIENT_CLOSE_ASAP > 0 {
+		return C_ERR
+	}
+
+	if c.flags&(CLIENT_REPLY_OFF|CLIENT_REPLY_SKIP) > 0 {
+		return C_ERR
+	}
+
+	if c.flags&CLIENT_MASTER > 0 && c.flags&CLIENT_MASTER_FORCE_REPLY == 0 {
+		return C_ERR
+	}
+
+	if c.conn == nil {
+		return C_ERR
+	}
+
+	if clientHasPendingReplies(c) && c.flags&CLIENT_PENDING_READ == 0 {
+		clientInstallWriteHandler(c)
+	}
+
+	return C_OK
+}
+
+func clientInstallWriteHandler(c *Client) {
+	if c.flags&CLIENT_PENDING_WRITE == 0 && (c.replState == REPL_STATE_NONE ||
+		(c.replState == SLAVE_STATE_ONLINE && c.replPutOnlineOnAck > 0)) {
+		c.flags |= CLIENT_PENDING_WRITE
+		server.clientsPendWrite.AddNodeHead(c)
+	}
+}
+
+func clientHasPendingReplies(c *Client) bool {
+	return c.bufpos > 0 || c.reply.Len() > 0
+}
+
+// setProtocolError todo
+func setProtocolError(err string, c *Client) {
+
 }

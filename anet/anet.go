@@ -1,4 +1,4 @@
-package main
+package anet
 
 import (
 	"errors"
@@ -7,7 +7,12 @@ import (
 	"syscall"
 )
 
-func anetCloexec(fd int) (err error) {
+const (
+	FdToPeerName = iota
+	FdToSockName
+)
+
+func Cloexec(fd int) (err error) {
 	var r, flags int
 	for {
 		_, _, r := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFD, 0)
@@ -36,11 +41,11 @@ func anetCloexec(fd int) (err error) {
 	return nil
 }
 
-func anetTcpServer(port int, addr string, backlog int) (int, error) {
+func TcpServer(port int, addr string, backlog int) (int, error) {
 	return _anetTcpServer(port, addr, syscall.AF_INET, backlog)
 }
 
-func anetTcp6Server(port int, addr string, backlog int) (int, error) {
+func Tcp6Server(port int, addr string, backlog int) (int, error) {
 	return _anetTcpServer(port, addr, syscall.AF_INET6, backlog)
 }
 
@@ -83,7 +88,7 @@ func anetListen(s int, addr syscall.Sockaddr, backlog int) error {
 	return nil
 }
 
-func anetNonBlock(fd int) error {
+func NonBlock(fd int) error {
 	return anetSetBlock(fd, true)
 }
 
@@ -113,7 +118,7 @@ func anetSetBlock(fd int, nonBlock bool) error {
 	return nil
 }
 
-func anetEnableTcpNoDelay(fd int) error {
+func EnableTcpNoDelay(fd int) error {
 	return anetSetTcpNoDelay(fd, 1)
 }
 
@@ -124,60 +129,59 @@ func anetSetTcpNoDelay(fd, val int) error {
 	return nil
 }
 
-func anetAccept(s int, ip *string, port *int) (connFd int, err error) {
+func Accept(s int, ip *string, port *int) (connFd int, err error) {
 	return anetGenericAccept(s, ip, port)
 }
 
 func anetGenericAccept(s int, ip *string, port *int) (nfd int, err error) {
-	nfd, _, err = syscall.Accept(s)
-	sa, _ := syscall.Getpeername(nfd)
-	if sa == nil {
-		return
+	var sa syscall.Sockaddr
+	nfd, sa, err = syscall.Accept(s)
+	if err != nil {
+		return 0, err
 	}
-	sd, ok := sa.(*syscall.SockaddrInet4)
-	if ok {
+
+	switch sd := sa.(type) {
+	case *syscall.SockaddrInet4:
 		*port = sd.Port
 		*ip = net.IP(sd.Addr[:]).String()
+	case *syscall.SockaddrInet6:
+		*port = sd.Port
+		*ip = net.IP(sd.Addr[:]).String()
+	default:
+		return 0, errors.New("get perrname type err")
 	}
-
-	sd6, ok := sa.(*syscall.SockaddrInet6)
-	if ok {
-		*port = sd6.Port
-		*ip = net.IP(sd6.Addr[:]).String()
-	}
-	return nfd, err
+	return nfd, nil
 }
 
-func anetKeepAlive(fd, interval int) error {
+func KeepAlive(fd, interval int) error {
 	val := 1
 	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_KEEPALIVE, val); err != nil {
 		return err
 	}
 
-	//if runtime.GOOS == "linux" {
-	//	val = interval
-	//	if err := syscall.SetsockoptInt(fd, syscall.IPPROTO_TCP, syscall.TCP_KEEPIDLE, val); err != nil {
-	//		return err
-	//	}
-	//
-	//	val = interval / 3
-	//	if val == 0 {
-	//		val = 1
-	//	}
-	//	if err := syscall.SetsockoptInt(fd, syscall.IPPROTO_TCP, syscall.TCP_KEEPINTVL, val); err != nil {
-	//		return err
-	//	}
-	//
-	//	val = 3
-	//	if err := syscall.SetsockoptInt(fd, syscall.IPPROTO_TCP, syscall.TCP_KEEPCNT, val); err != nil {
-	//		return err
-	//	}
-	//} else {
-	//	// nothing todo
-	//}
-	return nil
+	return anetKeepAlive(fd, interval)
 }
 
-func anetFdToString(fd int) {
-	// todo
+func FdToString(fd int, port *int, fd2strType int) string {
+	var sa syscall.Sockaddr
+	if fd2strType == FdToPeerName {
+		sa, _ = syscall.Getpeername(fd)
+	} else {
+		sa, _ = syscall.Getsockname(fd)
+	}
+
+	switch sd := sa.(type) {
+	case *syscall.SockaddrInet4:
+		if port != nil {
+			*port = sd.Port
+		}
+		return net.IP(sd.Addr[:]).String()
+	case *syscall.SockaddrInet6:
+		if port != nil {
+			*port = sd.Port
+		}
+		return net.IP(sd.Addr[:]).String()
+	default:
+		return ""
+	}
 }

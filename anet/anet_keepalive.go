@@ -1,4 +1,6 @@
-package main
+//go:build linux
+
+package anet
 
 import (
 	"syscall"
