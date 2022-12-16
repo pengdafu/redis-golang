@@ -2,10 +2,12 @@ package main
 
 import (
 	"log"
+	"math/rand"
 	"os"
 	"os/signal"
 	"runtime"
 	"syscall"
+	"time"
 )
 
 var (
@@ -15,9 +17,11 @@ var (
 func main() {
 	checkOSSupport()
 
+	rand.Seed(time.Now().UnixNano())
+
 	redisServer := New()
 
-	redisServer.Init()
+	redisServer.InitServer()
 
 	go func() {
 		// todo graceful start/stop

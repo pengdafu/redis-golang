@@ -39,7 +39,7 @@ type ConnectionCallbackFunc func(conn *Connection)
 type ConnectionType struct {
 	AeHandler       func(el *ae.EventLoop, fd int, clientData interface{}, mask int)
 	Connect         func(conn *Connection, addr string, port int, sourceAddr string, connectHandler ConnectionCallbackFunc)
-	Write           func(conn *Connection, data string) error
+	Write           func(conn *Connection, data string) int
 	Read            func(conn *Connection, sdsBuf []byte, readLen int) (int, error)
 	Close           func(conn *Connection)
 	Accept          func(conn *Connection, acceptHandler ConnectionCallbackFunc) error
@@ -157,7 +157,7 @@ func connClose(conn *Connection) {
 	conn.Type.Close(conn)
 }
 
-func connWrite(conn *Connection, data string) error {
+func connWrite(conn *Connection, data string) int {
 	return conn.Type.Write(conn, data)
 }
 
@@ -179,8 +179,8 @@ func connEnableTcpNoDelay(conn *Connection) error {
 	return anet.EnableTcpNoDelay(conn.Fd)
 }
 
-func connSocketWrite(conn *Connection, data string) error {
-	_, err := syscall.Write(conn.Fd, util.String2Bytes(data))
+func connSocketWrite(conn *Connection, data string) int {
+	n, err := syscall.Write(conn.Fd, util.String2Bytes(data))
 	if err != nil {
 		conn.LastErr = err
 
@@ -188,7 +188,7 @@ func connSocketWrite(conn *Connection, data string) error {
 			conn.State = CONN_STATE_ERROR
 		}
 	}
-	return err
+	return n
 }
 
 func connSocketRead(conn *Connection, sdsBuf []byte, readLen int) (int, error) {
@@ -229,8 +229,8 @@ func connSetReadHandler(conn *Connection, fn ConnectionCallbackFunc) {
 	conn.Type.SetReadHandler(conn, fn)
 }
 
-func connSetWriteHandlerWithBarrier(conn *Connection, fn ConnectionCallbackFunc, barrier int) {
-	conn.Type.SetWriteHandler(conn, fn, barrier)
+func connSetWriteHandlerWithBarrier(conn *Connection, fn ConnectionCallbackFunc, barrier int) error {
+	return conn.Type.SetWriteHandler(conn, fn, barrier)
 }
 
 func connPeerToString(conn *Connection, port *int, fd2strType int) string {

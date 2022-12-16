@@ -170,6 +170,10 @@ func (el *EventLoop) AeCreateFileEvent(fd, mask int, proc FileProc, clientData i
 	return nil
 }
 
+func (el *EventLoop) AeSetBeforeSleepProc(beforeSleep BeforeSleepProc) {
+	el.BeforeSleep = beforeSleep
+}
+
 func (el *EventLoop) AeMain() {
 	el.Stop = 0
 	for el.Stop == 0 {

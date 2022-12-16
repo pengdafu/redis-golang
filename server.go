@@ -6,6 +6,7 @@ import (
 	"github.com/pengdafu/redis-golang/adlist"
 	"github.com/pengdafu/redis-golang/ae"
 	"github.com/pengdafu/redis-golang/anet"
+	"github.com/pengdafu/redis-golang/dict"
 	"github.com/pengdafu/redis-golang/sds"
 	"github.com/pengdafu/redis-golang/util"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 const (
@@ -170,6 +172,9 @@ type socketFds struct {
 type RedisServer struct {
 	el *ae.EventLoop
 
+	commands     *dict.Dict
+	origCommands *dict.Dict
+
 	protectedMode int
 
 	port          int
@@ -191,17 +196,32 @@ type RedisServer struct {
 	maxMemoryPolicy         int
 
 	lruClock uint32
-	hz       uint32
+	hz       float32
 
 	dbnum        int
 	db           []*redisDb
 	nextClientId uint64
 
 	unixtime   int64
+	ustime     int64 // ms
 	luaTimeout uint32
 
-	clientsPendWrite *adlist.List
+	clientsPendWrite   *adlist.List
+	aofState           int
+	aofFsync           int
+	statNetOutputBytes int
 }
+
+const (
+	aofOff = iota
+	aofOn
+	aofWaitRewrite
+)
+const (
+	aofFsyncOn = iota
+	aofFsyncAlways
+	aofFsyncEverySec
+)
 
 var server *RedisServer
 
@@ -228,11 +248,11 @@ type Client struct {
 	multiBulkLen              int   // 要读取的多个批量参数的数量
 	bulkLen                   int   // 批量请求的参数长度
 	reply                     *adlist.List
-	replyBytes                uint64 // 要响应的字节长度
-	sentLen                   uint64 // 当前缓冲区或者正在发送中的对象已经发送的字节数
-	ctime                     int64  // 客户端创建时间
-	duration                  int64  // 当前command的运行时间，用来阻塞或非阻塞命令的延迟
-	lastInteraction           int64  // 上次交互时间，用于超时，单位秒
+	replyBytes                int   // 要响应的字节长度
+	sentLen                   int   // 当前缓冲区或者正在发送中的对象已经发送的字节数
+	ctime                     int64 // 客户端创建时间
+	duration                  int64 // 当前command的运行时间，用来阻塞或非阻塞命令的延迟
+	lastInteraction           int64 // 上次交互时间，用于超时，单位秒
 	obufSoftLimitReachedTime  time.Duration
 	flags                     int                          // 客户端的flag，CLIENT_* 宏定义
 	authenticated             bool                         // 当默认用户需要认证
@@ -256,7 +276,7 @@ type Client struct {
 	bpop                      blockingState                // blocking state
 	woff                      int                          // 最后一次写的全局复制偏移量
 	watchedKeys               *adlist.List                 // Keys WATCHED for MULTI/EXEC CAS
-	pubSubChannels            *dict                        // 客户端关注的渠道(SUBSCRIBE)
+	pubSubChannels            *dict.Dict                   // 客户端关注的渠道(SUBSCRIBE)
 	pubSubPatterns            *adlist.List                 // 客户端关注的模式(SUBSCRIBE)
 	peerId                    sds.SDS                      // Cached peer ID
 	sockName                  sds.SDS                      // Cached connection target address.
@@ -276,16 +296,37 @@ type Client struct {
 type redisDb struct {
 	// todo redisDb
 }
+
+const MaxKeysBuffer = 256
+
+type getKeysResult struct {
+	keysBuf [MaxKeysBuffer]int
+	keys    []int
+	numKeys int
+	size    int
+}
+type RedisCommandProc func(c *Client)
+type RedisGetKeysProc func(cmd *redisCommand, argv []*robj, argc int) (*getKeysResult, error)
 type redisCommand struct {
+	name                       string
+	proc                       RedisCommandProc
+	arity                      int
+	sflags                     string
+	flags                      uint64
+	getKeysProc                RedisGetKeysProc
+	firstKey, lastKey, keyStep int
+	microseconds, calls        uint64
+	id                         int
 }
 type user struct {
 	flags uint64
 }
 type multiState struct {
+	cmdFlags uint64
 }
 type blockingState struct {
 	timeout time.Duration
-	keys    *dict
+	keys    *dict.Dict
 	target  *robj
 	listPos struct {
 		wherefrom int
@@ -307,15 +348,12 @@ func New() *RedisServer {
 	return server
 }
 
-func (server *RedisServer) Init() {
-	var err error
+func (server *RedisServer) InitServer() {
+	dict.SetHashFunctionSeed(util.GetRandomBytes(16))
 
-	server.ipfd = new(socketFds)
-	server.port = 6380
-	server.bindAddr[0] = "127.0.0.1"
-	server.bindAddrCount = 1
-	server.maxclients = 100
-	server.clientsPendWrite = adlist.Create()
+	initServerConfig()
+
+	var err error
 
 	createSharedObjects()
 
@@ -324,6 +362,7 @@ func (server *RedisServer) Init() {
 	if err != nil {
 		panic(fmt.Sprintf("create aeEventLoop err: %v", err))
 	}
+	server.el.AeSetBeforeSleepProc(beforeSleep)
 
 	if server.port != 0 {
 		if err := server.listenToPort(server.port, server.ipfd); err != C_OK {
@@ -341,6 +380,21 @@ func (server *RedisServer) Init() {
 	if server.createSocketAcceptHandler(server.ipfd, acceptTcpHandler) != C_OK {
 		panic("Unrecoverable error creating TCP socket accept handler.")
 	}
+}
+
+func initServerConfig() {
+	server.ipfd = new(socketFds)
+	server.port = 6380
+	server.bindAddr[0] = "127.0.0.1"
+	server.bindAddrCount = 1
+	server.maxclients = 100
+	server.clientsPendWrite = adlist.Create()
+	server.hz = 0.5
+	server.clientMaxQueryBufLen = 1024 * 1024
+
+	server.commands = dict.Create(commandTableDictType, nil)
+	server.origCommands = dict.Create(commandTableDictType, nil)
+	populateCommandTable()
 }
 
 func (server *RedisServer) Start() {
@@ -411,6 +465,186 @@ func (server *RedisServer) connSocketClose(conn *Connection) {
 
 }
 
+var redisCommandTable = []redisCommand{
+	{"module", moduleCommand, -2,
+		"admin no-script",
+		0, nil, 0, 0, 0, 0, 0, 0},
+
+	{"get", getCommand, 2,
+		"read-only fast @string",
+		0, nil, 1, 1, 1, 0, 0, 0},
+
+	/* Note that we can't flag set as fast, since it may perform an
+	 * implicit DEL of a large key. */
+	{"set", setCommand, -3,
+		"write use-memory @string",
+		0, nil, 1, 1, 1, 0, 0, 0},
+	{"exec", execCommand, 1,
+		"no-script no-monitor no-slowlog ok-loading ok-stale @transaction",
+		0, nil, 0, 0, 0, 0, 0, 0},
+}
+
+func populateCommandTable() {
+	for i := 0; i < len(redisCommandTable); i++ {
+		c := &redisCommandTable[i]
+		if populateCommandTableParseFlags(c, c.sflags) != C_OK {
+			panic("Unsupported command flag")
+		}
+
+		c.id = ACLGetCommandId(c.name)
+		s := sds.NewLen(c.name)
+		if server.commands.Add(unsafe.Pointer(&s), unsafe.Pointer(c)) &&
+			server.origCommands.Add(unsafe.Pointer(&s), unsafe.Pointer(c)) {
+			continue
+		}
+		panic("add command to server.commands err")
+	}
+}
+
+// todo rax tree
+var m = map[string]int{}
+var commandId int
+
+func ACLGetCommandId(name string) int {
+	if id, ok := m[name]; ok {
+		return id
+	}
+	commandId++
+	m[name] = commandId
+	return commandId
+}
+
+const (
+	CmdWrite = 1 << iota
+	CmdReadOnly
+	CmdDenyOom
+	CmdModule
+	CmdAdmin
+	CmdPubSub
+	CmdNoScript
+	CmdRandom
+	CmdSortForScript
+	CmdLoading
+	CmdStale
+	CmdSkipMonitor
+	CmdSkipSlowLog
+	CmdAsking
+	CmdFast
+	CmdNoAuth
+	CmdModuleGetKeys
+	CmdModuleNoCluster
+	CmdCategoryKeySpace
+	CmdCategoryRead
+	CmdCategoryWrite
+	CmdCategorySet
+	CmdCategorySortedSet
+	CmdCategoryList
+	CmdCategoryHash
+	CmdCategoryString
+	CmdCategoryBitmap
+	CmdCategoryHyperloglog
+	CmdCategoryGeo
+	CmdCategoryStream
+	CmdCategoryPubSub
+	CmdCategoryAdmin
+	CmdCategoryFast
+	CmdCategorySlow
+	CmdCategoryBlocking
+	CmdCategoryDangerous
+	CmdCategoryConnection
+	CmdCategoryTransaction
+	CmdCategoryScripting
+)
+
+func populateCommandTableParseFlags(c *redisCommand, sflags string) error {
+	argv, argc := sds.SplitArgs(sds.NewLen(sflags))
+	if argv == nil {
+		return C_ERR
+	}
+
+	for i := 0; i < argc; i++ {
+		flag := argv[i].BufData(0)
+		if util.StrCmp(flag, "write") {
+			c.flags |= CmdWrite | CmdCategoryWrite
+		} else if util.StrCmp(flag, "read-only") {
+			c.flags |= CmdReadOnly | CmdCategoryRead
+		} else if util.StrCmp(flag, "use-memory") {
+			c.flags |= CmdDenyOom
+		} else if util.StrCmp(flag, "admin") {
+			c.flags |= CmdAdmin | CmdCategoryAdmin | CmdCategoryDangerous
+		} else if util.StrCmp(flag, "pubsub") {
+			c.flags |= CmdPubSub | CmdCategoryPubSub
+		} else if util.StrCmp(flag, "no-script") {
+			c.flags |= CmdNoScript
+		} else if util.StrCmp(flag, "random") {
+			c.flags |= CmdRandom
+		} else if util.StrCmp(flag, "to-sort") {
+			c.flags |= CmdSortForScript
+		} else if util.StrCmp(flag, "ok-loading") {
+			c.flags |= CmdLoading
+		} else if util.StrCmp(flag, "ok-stale") {
+			c.flags |= CmdStale
+		} else if util.StrCmp(flag, "no-monitor") {
+			c.flags |= CmdSkipMonitor
+		} else if util.StrCmp(flag, "no-slowlog") {
+			c.flags |= CmdSkipSlowLog
+		} else if util.StrCmp(flag, "cluster-asking") {
+			c.flags |= CmdAsking
+		} else if util.StrCmp(flag, "fast") {
+			c.flags |= CmdFast | CmdCategoryFast
+		} else if util.StrCmp(flag, "no-auth") {
+			c.flags |= CmdNoAuth
+		} else {
+			if catflag := ACLGetCommandCategoryFlagByName(string(flag[1:])); catflag > 0 && flag[0] == '@' {
+				c.flags |= catflag
+			} else {
+				return C_ERR
+			}
+		}
+	}
+
+	if c.flags&CmdCategoryFast == 0 {
+		c.flags |= CmdCategorySlow
+	}
+	return C_OK
+}
+
+var ACLCommandCategories = []struct {
+	name string
+	flag uint64
+}{
+	{"keyspace", CmdCategoryKeySpace},
+	{"read", CmdCategoryRead},
+	{"write", CmdCategoryWrite},
+	{"set", CmdCategorySet},
+	{"sortedset", CmdCategorySortedSet},
+	{"list", CmdCategoryList},
+	{"hash", CmdCategoryHash},
+	{"string", CmdCategoryString},
+	{"bitmap", CmdCategoryBitmap},
+	{"hyperloglog", CmdCategoryHyperloglog},
+	{"geo", CmdCategoryGeo},
+	{"stream", CmdCategoryStream},
+	{"pubsub", CmdCategoryPubSub},
+	{"admin", CmdCategoryAdmin},
+	{"fast", CmdCategoryFast},
+	{"slow", CmdCategorySlow},
+	{"blocking", CmdCategoryBlocking},
+	{"dangerous", CmdCategoryDangerous},
+	{"connection", CmdCategoryConnection},
+	{"transaction", CmdCategoryTransaction},
+	{"scripting", CmdCategoryScripting},
+}
+
+func ACLGetCommandCategoryFlagByName(flag string) uint64 {
+	for _, category := range ACLCommandCategories {
+		if category.flag > 0 && category.name == flag {
+			return category.flag
+		}
+	}
+	return 0
+}
+
 // clientReplyBlock.size = cap(buf)
 type clientReplyBlock struct {
 	//size int
@@ -418,16 +652,114 @@ type clientReplyBlock struct {
 	buf  []byte
 }
 
+const (
+	CmdCallNone    = 0
+	CmdCallSlowLog = 1 << iota
+	CmdCallStats
+	CmdCallPropacateAof
+	CmdCallPropacateRepl
+	CmdCallNowRap
+	CmdCallPropacate = CmdCallPropacateAof | CmdCallPropacateRepl
+	CmdCallFull      = CmdCallSlowLog | CmdCallStats | CmdCallPropacate
+)
+
 func processCommand(c *Client) error {
 	moduleCallCommandFilters(c)
 
-	if util.Bytes2String(c.argv[0].ptr.(sds.SDS).Offset(0)) == "quit" {
+	if util.StrCmp(c.argv[0].ptr.(sds.SDS).BufData(0), "quit") {
 		addReply(c, shared.ok)
 		c.flags |= CLIENT_CLOSE_AFTER_REPLY
 		return C_ERR
 	}
 
 	c.cmd = lookupCommand(c.argv[0].ptr.(sds.SDS))
+	c.lastCmd = c.cmd
+	if c.cmd == nil {
+		ss := make([]sds.SDS, len(c.argv)-1)
+		for i := 1; i < c.argc; i++ {
+			ss[i] = c.argv[i].ptr.(sds.SDS)
+		}
+		args := sds.CatPrintf(ss...)
+		rejectCommandFormat(c, "unknown command `%s`, with args beginning with: %s",
+			c.argv[0].ptr.(sds.SDS).BufData(0), args)
+		return C_OK
+	} else if (c.cmd.arity > 0 && c.cmd.arity != c.argc) || c.argc < -c.cmd.arity {
+		rejectCommandFormat(c, "wrong number of arguments for '%s' command",
+			c.cmd.name)
+		return C_OK
+	}
+
+	//isWriteCommand := c.cmd.flags&CmdWrite > 0 ||
+	//	(c.cmd.name == "exec" && c.mstate.cmdFlags&CmdWrite > 0)
+	//isDenyOOMCommand := c.cmd.flags&CmdDenyOom > 0 ||
+	//	(c.cmd.name == "exec" && c.mstate.cmdFlags&CmdDenyOom > 0)
+	//isDenyStaleCommand := c.cmd.flags&CmdStale > 0 ||
+	//	(c.cmd.name == "exec" && c.mstate.cmdFlags&CmdStale > 0)
+	//isDenyLoadingCommand := c.cmd.flags&CmdLoading > 0 ||
+	//	(c.cmd.name == "exec" && c.mstate.cmdFlags&CmdLoading > 0)
+
+	// todo other
+	if authRequired(c) && c.flags&CmdNoAuth == 0 {
+		rejectCommand(c, shared.noAuthErr)
+		return C_OK
+	}
+
+	/**
+	忽略了很多....todo todo
+	*/
+
+	call(c, CmdCallFull)
+	return C_OK
+}
+
+func call(c *Client, flags int) {
+	realCmd := c.cmd
+
+	start := server.ustime
+	c.cmd.proc(c)
+	duration := time.Now().UnixMilli() - start
+	if flags&CmdCallStats > 0 {
+		realCmd.calls++
+		realCmd.microseconds += uint64(duration)
+	}
+}
+
+func rejectCommand(c *Client, reply *robj) {
+	flagTransaction(c)
+
+	if c.cmd != nil && c.cmd.name == "exec" {
+		execCommandAbort(c, reply.ptr.(sds.SDS).BufData(0))
+	} else {
+		addReplyErrorObject(c, reply)
+	}
+}
+
+func addReplyErrorObject(c *Client, reply *robj) {
+	addReply(c, reply)
+	afterErrorReply(c, reply.ptr.(sds.SDS).BufData(0))
+}
+
+func rejectCommandFormat(c *Client, format string, vv ...interface{}) {
+	flagTransaction(c)
+
+	err := fmt.Sprintf(format, vv...)
+	err = strings.ReplaceAll(err, "\r\n", "  ")
+
+	if c.cmd != nil && c.cmd.name == "exec" {
+		execCommandAbort(c, err)
+	} else {
+		addReplyError(c, err)
+	}
+}
+
+func flagTransaction(c *Client) {
+	if c.flags&CLIENT_MULTI > 0 {
+		c.flags |= CLIENT_DIRTY_EXEC
+	}
+}
+
+func lookupCommand(s sds.SDS) *redisCommand {
+	return (*redisCommand)(server.commands.FetchValue(unsafe.Pointer(&s)))
 }
 
 type shareObject struct {
@@ -496,7 +828,7 @@ func createSharedObjects() {
 	shared.colon = createObject(ObjString, sds.NewLen(":"))
 	shared.plus = createObject(ObjString, sds.NewLen("+"))
 
-	/* The shared NULL depends on the protocol version. */
+	/* The shared nil depends on the protocol version. */
 	shared.null[0] = nil
 	shared.null[1] = nil
 	shared.null[2] = createObject(ObjString, sds.NewLen("$-1\r\n"))
@@ -552,4 +884,26 @@ func createSharedObjects() {
 	 * string in string comparisons for the ZRANGEBYLEX command. */
 	shared.minString = sds.NewLen("minstring")
 	shared.maxString = sds.NewLen("maxstring")
+}
+
+var commandTableDictType = &dict.Type{
+	HashFunction:  dictSdsCaseHash,
+	KeyDup:        nil,
+	ValDup:        nil,
+	KeyCompare:    dictSdsKeyCaseCompare,
+	KeyDestructor: dictSdsDestructor,
+	ValDestructor: nil,
+}
+
+func dictSdsCaseHash(key unsafe.Pointer) uint64 {
+	return dict.GenCaseHashFunction((*sds.SDS)(key).BufData(0))
+}
+func dictSdsKeyCaseCompare(privData interface{}, key1, key2 unsafe.Pointer) bool {
+	return util.BytesCmp((*sds.SDS)(key1).BufData(0), (*sds.SDS)(key2).BufData(0))
+}
+func dictSdsDestructor(privData interface{}, key unsafe.Pointer) {
+}
+
+func beforeSleep(eventLoop *ae.EventLoop) {
+	handleClientsWithPendingWrites()
 }

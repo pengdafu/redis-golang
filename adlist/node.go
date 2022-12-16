@@ -12,3 +12,25 @@ func (n *ListNode) NodeValue() interface{} {
 	}
 	return n.value
 }
+
+const (
+	alStartHead = 0
+	alStartTail = 1
+)
+
+type ListIter struct {
+	next      *ListNode
+	direction int
+}
+
+func (iter *ListIter) Next() *ListNode {
+	cur := iter.next
+	if cur != nil {
+		if iter.direction == alStartHead {
+			iter.next = cur.next
+		} else {
+			iter.next = cur.prev
+		}
+	}
+	return cur
+}

@@ -116,3 +116,8 @@ func createEmbeddedStringObject(ptr []byte) *robj {
 func createRawStringObject(ptr []byte) *robj {
 	return createObject(ObjString, sds.NewLen(util.Bytes2String(ptr)))
 }
+
+func (o *robj) sdsEncodedObject() bool {
+	ed := o.getEncoding()
+	return ed == ObjEncodingRaw || ed == ObjEncodingEmbStr
+}

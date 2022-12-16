@@ -66,6 +66,27 @@ func (l *List) AddNodeTail(value interface{}) *List {
 	return l
 }
 
+func (l *List) DelNode(node *ListNode) {
+	if node.prev != nil {
+		node.prev.next = node.next
+	} else {
+		l.head = node.next
+	}
+
+	if node.next != nil {
+		node.next.prev = node.next
+	} else {
+		l.tail = node.prev
+	}
+}
+
 func (l *List) Last() *ListNode {
 	return l.tail
+}
+func (l *List) First() *ListNode {
+	return l.head
+}
+
+func (l *List) Rewind() *ListIter {
+	return &ListIter{l.head, alStartHead}
 }

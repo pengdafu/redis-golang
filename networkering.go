@@ -6,6 +6,7 @@ import (
 	"github.com/pengdafu/redis-golang/adlist"
 	"github.com/pengdafu/redis-golang/ae"
 	"github.com/pengdafu/redis-golang/anet"
+	"github.com/pengdafu/redis-golang/dict"
 	"github.com/pengdafu/redis-golang/sds"
 	"github.com/pengdafu/redis-golang/util"
 	"log"
@@ -52,7 +53,7 @@ func acceptCommonHandler(conn *Connection, flags int, ip string) {
 		} else {
 			err = "-ERR max number of clients reached\r\n"
 		}
-		if connWrite(conn, err) != nil {
+		if connWrite(conn, err) <= 0 {
 			// noting todo
 		}
 		server.statRejectedConn++
@@ -130,7 +131,7 @@ func createClient(conn *Connection) *Client {
 	c.reply.SetDupMethod(dupClientReplyValue)
 	c.bType = BLOCKED_NONE
 	c.bpop.timeout = 0
-	c.bpop.keys = dictCreate(nil, nil)
+	c.bpop.keys = dict.Create(nil, nil)
 	c.bpop.target = nil
 	c.bpop.xReadGroup = nil
 	c.bpop.xReadConsumer = nil
@@ -139,7 +140,7 @@ func createClient(conn *Connection) *Client {
 	c.bpop.replOffset = 0
 	c.woff = 0
 	c.watchedKeys = adlist.Create()
-	c.pubSubChannels = dictCreate(nil, nil)
+	c.pubSubChannels = dict.Create(nil, nil)
 	c.pubSubPatterns = adlist.Create()
 	c.peerId = sds.Empty()
 	c.sockName = sds.Empty()
@@ -188,7 +189,7 @@ func readQueryFromClient(conn *Connection) {
 	}
 
 	c.querybuf = sds.MakeRoomFor(c.querybuf, readLen)
-	nread, err := connRead(c.conn, c.querybuf.Offset(qblen), readLen)
+	nread, err := connRead(c.conn, c.querybuf.Buf(qblen), readLen)
 	if nread < 0 {
 		return
 	}
@@ -250,7 +251,7 @@ func processInputBuffer(c *Client) {
 		}
 
 		if c.reqType == 0 {
-			if c.querybuf.Offset(c.qbPos)[0] == '*' {
+			if c.querybuf.BufData(c.qbPos)[0] == '*' {
 				c.reqType = PROTO_REQ_MULTIBULK
 			} else {
 				c.reqType = PROTO_REQ_INLINE
@@ -292,7 +293,7 @@ func processInputBuffer(c *Client) {
 }
 
 func processInlineBuffer(c *Client) error {
-	newLineIdx := bytes.IndexByte(c.querybuf.Offset(c.qbPos), '\n')
+	newLineIdx := bytes.IndexByte(c.querybuf.BufData(c.qbPos), '\n')
 	lineFeedChars := 1
 	if newLineIdx == -1 {
 		if sds.Len(c.querybuf)-c.qbPos > PROTO_INLINE_MAX_SIZE {
@@ -302,8 +303,8 @@ func processInlineBuffer(c *Client) error {
 		return C_ERR
 	}
 
-	newline := c.querybuf.Offset(c.qbPos)[:newLineIdx+1]
-	if len(newline) > 0 && c.querybuf.Offset(c.qbPos)[0] != newline[0] && newline[len(newline)-1] == '\r' {
+	newline := c.querybuf.BufData(c.qbPos)[:newLineIdx+1]
+	if len(newline) > 0 && c.querybuf.BufData(c.qbPos)[0] != newline[0] && newline[len(newline)-1] == '\r' {
 		newline = newline[:len(newline)-1]
 		lineFeedChars++
 	}
@@ -348,7 +349,7 @@ func processInlineBuffer(c *Client) error {
 
 func processMultibulkBuffer(c *Client) error {
 	if c.multiBulkLen == 0 {
-		newLineIdx := bytes.IndexByte(c.querybuf.Offset(c.qbPos), '\r')
+		newLineIdx := bytes.IndexByte(c.querybuf.BufData(c.qbPos), '\r')
 		if newLineIdx == -1 {
 			if sds.Len(c.querybuf) > PROTO_INLINE_MAX_SIZE {
 				addReplyError(c, "Protocol error: too big mbulk count string")
@@ -360,7 +361,7 @@ func processMultibulkBuffer(c *Client) error {
 		/* Buffer should also contain \n */
 		//if (newline-(c->querybuf+c->qb_pos) > (ssize_t)(sdslen(c->querybuf)-c->qb_pos-2))
 		//return C_ERR;
-		ll, err := strconv.ParseInt(util.Bytes2String(c.querybuf.Offset(c.qbPos)[1:newLineIdx]), 10, 64)
+		ll, err := strconv.ParseInt(util.Bytes2String(c.querybuf.BufData(c.qbPos)[1:newLineIdx]), 10, 64)
 		if err != nil || ll > 1024*1024 {
 			addReplyError(c, fmt.Sprintf("Protocol error: invalid multibulk length: %v, len: %d", err, ll))
 			setProtocolError("invalid mbulk count", c)
@@ -382,7 +383,7 @@ func processMultibulkBuffer(c *Client) error {
 
 	for c.multiBulkLen > 0 {
 		if c.bulkLen == -1 {
-			newLineIdx := bytes.IndexByte(c.querybuf.Offset(c.qbPos), '\r')
+			newLineIdx := bytes.IndexByte(c.querybuf.BufData(c.qbPos), '\r')
 			if newLineIdx == -1 {
 				if sds.Len(c.querybuf) > PROTO_INLINE_MAX_SIZE {
 					addReplyError(c, "Protocol error: too big bulk count string")
@@ -392,15 +393,15 @@ func processMultibulkBuffer(c *Client) error {
 				break
 			}
 
-			if c.querybuf.Offset(c.qbPos)[0] != '$' {
+			if c.querybuf.BufData(c.qbPos)[0] != '$' {
 				addReplyErrorFormat(c,
 					"Protocol error: expected '$', got '%c'",
-					c.querybuf.Offset(c.qbPos)[0])
+					c.querybuf.BufData(c.qbPos)[0])
 				setProtocolError("expected $ but got something else", c)
 				return C_ERR
 			}
 
-			ll, err := strconv.ParseInt(util.Bytes2String(c.querybuf.Offset(c.qbPos)[1:newLineIdx]), 10, 64)
+			ll, err := strconv.ParseInt(util.Bytes2String(c.querybuf.BufData(c.qbPos)[1:newLineIdx]), 10, 64)
 			if err != nil || ll < 0 || (c.flags&CLIENT_MASTER == 0 &&
 				ll > server.protoMaxBulkLen) {
 				addReplyError(c, "Protocol error: invalid bulk length")
@@ -436,7 +437,7 @@ func processMultibulkBuffer(c *Client) error {
 				c.querybuf = sds.NewLen(util.Bytes2String(make([]byte, c.bulkLen+2)))
 				sds.Clear(c.querybuf)
 			} else {
-				c.argv[c.argc] = createStringObject(util.Bytes2String(c.querybuf.Offset(c.qbPos)[:c.bulkLen]))
+				c.argv[c.argc] = createStringObject(util.Bytes2String(c.querybuf.BufData(c.qbPos)[:c.bulkLen]))
 				c.argc++
 				c.argvLenSum += c.bulkLen
 				c.qbPos += c.bulkLen + 2
@@ -465,8 +466,22 @@ func processCommandAndResetClient(c *Client) error {
 	return deadClient
 }
 
+// todo
 func commandProcessed(c *Client) {
+	if c.flags&CLIENT_BLOCKED == 0 || c.bType != BLOCKED_MODULE {
+		resetClient(c)
+	}
+}
 
+// todo
+func freeClientArgv(c *Client) {
+	for i := 0; i < c.argc; i++ {
+		//decrRefCount(c.argv[i])
+	}
+
+	c.argc = 0
+	c.argv = nil
+	c.argvLenSum = 0
 }
 
 func authRequired(c *Client) bool {
@@ -492,7 +507,17 @@ func getClientType(c *Client) int {
 
 // resetClient todo
 func resetClient(c *Client) {
+	freeClientArgv(c)
 
+	c.reqType = 0
+	c.multiBulkLen = 0
+	c.bulkLen = -1
+
+	c.flags &= ^CLIENT_REPLY_SKIP
+	if c.flags&CLIENT_REPLY_SKIP_NEXT > 0 {
+		c.flags |= CLIENT_REPLY_SKIP
+		c.flags &= ^CLIENT_REPLY_SKIP_NEXT
+	}
 }
 
 // clientsArePaused todo
@@ -508,8 +533,10 @@ func clientSetDefaultAuth(c *Client) {
 func freeClientReplyValue(o interface{}) {
 
 }
-func freeClientAsync(c *Client) {
 
+// todo
+func freeClientAsync(c *Client) {
+	syscall.Close(c.conn.Fd)
 }
 func dupClientReplyValue(o interface{}) interface{} {
 	return nil
@@ -577,6 +604,50 @@ func postponeClientRead(c *Client) bool {
 	return false
 }
 
+type ByteArrOrString interface {
+	[]byte | string
+}
+
+func addReply(c *Client, o *robj) {
+	if prepareClientToWrite(c) != C_OK {
+		return
+	}
+
+	if o.sdsEncodedObject() {
+		buf := o.ptr.(sds.SDS).BufData(0)
+		if _addReplyToBuffer(c, buf) != C_OK {
+			_addReplyProtoToList(c, buf)
+		}
+	} else if o.getEncoding() == ObjEncodingInt {
+		buf := fmt.Sprintf("%v", o.ptr)
+		if _addReplyToBuffer(c, buf) != C_OK {
+			_addReplyProtoToList(c, buf)
+		}
+	} else {
+		panic("Wrong obj->encoding in addReply()")
+	}
+}
+
+func _addReplyToBuffer[T ByteArrOrString](c *Client, value T) error {
+	available := len(c.buf) - c.bufpos
+	if c.flags&CLIENT_CLOSE_AFTER_REPLY > 0 {
+		return C_OK
+	}
+
+	// 如果有list buffer等回包，则直接加到list中
+	if c.reply.Len() > 0 {
+		return C_ERR
+	}
+
+	// 放不下，放到c.reply中
+	if available < len(value) {
+		return C_ERR
+	}
+	copy(c.buf[c.bufpos:], value)
+	c.bufpos += len(value)
+	return C_OK
+}
+
 func addReplyError(c *Client, err string) {
 	addReplyErrorLength(c, err)
 	afterErrorReply(c, err)
@@ -605,7 +676,7 @@ func addReplyProto(c *Client, s string) {
 	}
 }
 
-func _addReplyProtoToList(c *Client, s string) {
+func _addReplyProtoToList[T ByteArrOrString](c *Client, s T) {
 	if c.flags&CLIENT_CLOSE_AFTER_REPLY > 0 {
 		return
 	}
@@ -640,33 +711,15 @@ func _addReplyProtoToList(c *Client, s string) {
 		tail.used = sLen
 		copy(tail.buf, s)
 		c.reply.AddNodeTail(tail)
-		c.replyBytes += uint64(cap(tail.buf))
+		c.replyBytes += cap(tail.buf)
 	}
 
 	// asyncCloseClientOnOutputBufferLimitReached todo
 }
 
 // afterErrorReply todo
-func afterErrorReply(c *Client, err string) {
+func afterErrorReply[T ByteArrOrString](c *Client, err T) {
 
-}
-
-func _addReplyToBuffer(c *Client, s string) error {
-	available := len(c.buf) - c.bufpos
-
-	if c.flags&CLIENT_CLOSE_AFTER_REPLY > 0 {
-		return C_OK
-	}
-	if c.reply.Len() > 0 {
-		return C_ERR
-	}
-	if len(s) > available {
-		return C_ERR
-	}
-
-	copy(c.buf[c.bufpos:], s)
-	c.bufpos += len(s)
-	return C_OK
 }
 
 func prepareClientToWrite(c *Client) error {
@@ -712,4 +765,122 @@ func clientHasPendingReplies(c *Client) bool {
 // setProtocolError todo
 func setProtocolError(err string, c *Client) {
 
+}
+
+func handleClientsWithPendingWrites() int {
+	processed := server.clientsPendWrite.Len()
+
+	iter := server.clientsPendWrite.Rewind()
+	for {
+		ln := iter.Next()
+		if ln == nil {
+			break
+		}
+
+		c := ln.NodeValue().(*Client)
+		c.flags &= ^CLIENT_PENDING_WRITE
+		server.clientsPendWrite.DelNode(ln)
+
+		if c.flags&CLIENT_PROTECTED > 0 {
+			continue
+		}
+		if c.flags&CLIENT_CLOSE_ASAP > 0 {
+			continue
+		}
+		if writeToClient(c, 0) == C_ERR {
+			continue
+		}
+		if clientHasPendingReplies(c) {
+			aeBarrier := 0
+			if server.aofState == aofOn && server.aofFsync == aofFsyncAlways {
+				aeBarrier = 1
+			}
+			if err := connSetWriteHandlerWithBarrier(c.conn, sendReplyToClient, aeBarrier); err != nil {
+				freeClientAsync(c)
+			}
+		}
+	}
+
+	return processed
+}
+
+func sendReplyToClient(conn *Connection) {
+	c := connGetPrivateData(conn).(*Client)
+	writeToClient(c, 1)
+}
+
+func writeToClient(c *Client, handlerInstalled int) error {
+	server.statTotalReadsProcessed++
+	totWriten := 0
+	nwrite := 0
+	for clientHasPendingReplies(c) {
+		if c.bufpos > 0 {
+			nwrite = connWrite(c.conn, util.Bytes2String(c.buf[c.sentLen:c.bufpos]))
+			if nwrite <= 0 {
+				break
+			}
+			c.sentLen += nwrite
+			totWriten += nwrite
+			if c.sentLen == c.bufpos {
+				c.sentLen = 0
+				c.bufpos = 0
+			}
+		} else {
+			o := c.reply.First().NodeValue().(*clientReplyBlock)
+			objLen := o.used
+			if objLen == 0 {
+				c.replyBytes -= objLen
+				c.reply.DelNode(c.reply.First())
+				continue
+			}
+			nwrite = connWrite(c.conn, util.Bytes2String(o.buf[c.sentLen:objLen]))
+			if nwrite <= 0 {
+				break
+			}
+			c.sentLen += nwrite
+			totWriten += nwrite
+			if c.sentLen == objLen {
+				c.replyBytes -= len(o.buf)
+				c.reply.DelNode(c.reply.First())
+				c.sentLen = 0
+				if c.reply.Len() == 0 {
+					if c.replyBytes != 0 {
+						panic("unexpect reply bytes")
+					}
+				}
+			}
+		}
+
+		// todo
+		if totWriten > 64*1024 {
+			break
+		}
+	}
+
+	server.statNetOutputBytes += totWriten
+	if nwrite == -1 {
+		if connGetState(c.conn) == CONN_STATE_CONNECTED {
+			nwrite = 0
+		} else {
+			log.Printf("Error write to client: %v\n", c.conn.LastErr)
+			freeClientAsync(c)
+			return C_ERR
+		}
+	}
+	if totWriten > 0 {
+		if c.flags&CLIENT_MASTER > 0 {
+			c.lastInteraction = server.unixtime
+		}
+	}
+	if !clientHasPendingReplies(c) {
+		c.sentLen = 0
+		if handlerInstalled == 1 {
+			connSetWriteHandlerWithBarrier(c.conn, nil, 0)
+		}
+		if c.flags&CLIENT_CLOSE_AFTER_REPLY > 0 {
+			freeClientAsync(c)
+			return C_ERR
+		}
+	}
+	return C_OK
 }

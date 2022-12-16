@@ -2,6 +2,8 @@ package sds
 
 import (
 	"encoding/binary"
+	"github.com/pengdafu/redis-golang/util"
+	"strings"
 	"unicode"
 	"unsafe"
 )
@@ -52,7 +54,7 @@ type SDS struct {
 }
 
 func sdsHdrSize(sdsType uint8) int {
-	switch sdsType {
+	switch sdsType & TypeMask {
 	case Type5:
 		return int(unsafe.Sizeof(uint8(0))) // only flags uint8
 	case Type8:
@@ -211,7 +213,7 @@ func Len(s SDS) int {
 	sdsType := s.buf[flagOffset] & TypeMask
 	switch sdsType {
 	case Type5:
-		return int(sdsType >> TypeBits)
+		return int(s.buf[flagOffset] >> TypeBits)
 	case Type8:
 		return int(s.buf[lenOffset])
 	case Type16:
@@ -270,7 +272,7 @@ func IncrLen(s SDS, incr int) {
 	sdsType := s.buf[flagOffset] & TypeMask
 	switch sdsType {
 	case Type5:
-		oldLen := sdsType >> TypeBits
+		oldLen := s.buf[flagOffset] >> TypeBits
 		s.buf[flagOffset] = Type5 | (uint8(incr)+oldLen)<<TypeBits
 	case Type8:
 		s.buf[lenOffset] += uint8(incr)
@@ -283,12 +285,20 @@ func IncrLen(s SDS, incr int) {
 	}
 }
 
-func (s SDS) Offset(offset int) []byte {
+// BufData 返回实际数据
+func (s SDS) BufData(offset int) []byte {
+	end := Len(s)
+	hdrSize := sdsHdrSize(s.buf[flagOffset])
+	return s.buf[hdrSize+offset : hdrSize+offset+end]
+}
+
+// Buf 返回除hdr的buf
+func (s SDS) Buf(offset int) []byte {
 	return s.buf[sdsHdrSize(s.buf[flagOffset])+offset:]
 }
 
 func SplitArgs(s SDS) (argv []SDS, argc int) {
-	p := s.Offset(0)
+	p := s.BufData(0)
 
 	var vector []SDS
 	for { // while(1)
@@ -351,6 +361,7 @@ func SplitArgs(s SDS) (argv []SDS, argc int) {
 				} else {
 					if len(p) == 0 { // case \0
 						done = true
+						continue
 					}
 					switch p[0] {
 					case ' ', '\n', '\r', '\t' /*, '\0'*/ :
@@ -380,7 +391,7 @@ func Catlen(s SDS, p []byte, l int) SDS {
 	curLen := Len(s)
 
 	s = MakeRoomFor(s, l)
-	copy(s.Offset(curLen), p[:l])
+	copy(s.Buf(curLen), p[:l])
 	sdssetlen(s, curLen+l)
 
 	return s
@@ -424,11 +435,19 @@ func Range(s SDS, start, end int) {
 	}
 
 	if start > 0 && newlen > 0 {
-		copy(s.Offset(0), s.Offset(start)[:newlen])
+		copy(s.Buf(0), s.Buf(start)[:newlen])
 	}
 	sdssetlen(s, newlen)
 }
 
 func Clear(s SDS) {
 	sdssetlen(s, 0)
+}
+
+func CatPrintf(ss ...SDS) string {
+	ret := make([]string, 0, len(ss))
+	for _, s := range ss {
+		ret = append(ret, util.Bytes2String(s.BufData(0)))
+	}
+	return strings.Join(ret, ",")
 }
