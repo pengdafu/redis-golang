@@ -743,7 +743,7 @@ func prepareClientToWrite(c *Client) error {
 		return C_ERR
 	}
 
-	if clientHasPendingReplies(c) && c.flags&CLIENT_PENDING_READ == 0 {
+	if !clientHasPendingReplies(c) && c.flags&CLIENT_PENDING_READ == 0 {
 		clientInstallWriteHandler(c)
 	}
 

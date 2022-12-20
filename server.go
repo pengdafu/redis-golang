@@ -294,7 +294,15 @@ type Client struct {
 	buf    [PROTO_REPLY_CHUNK_BYTES]byte
 }
 type redisDb struct {
-	// todo redisDb
+	dict          *dict.Dict
+	expired       *dict.Dict
+	blockingKeys  *dict.Dict
+	readyKeys     *dict.Dict
+	watchedKeys   *dict.Dict
+	id            int
+	avgTTL        int64
+	expiresCursor uint64
+	defragLater   *adlist.List
 }
 
 const MaxKeysBuffer = 256
@@ -362,6 +370,19 @@ func (server *RedisServer) InitServer() {
 	if err != nil {
 		panic(fmt.Sprintf("create aeEventLoop err: %v", err))
 	}
+	server.db = make([]*redisDb, server.dbnum)
+	for i := 0; i < server.dbnum; i++ {
+		db := &redisDb{}
+		db.dict = dict.Create(dbDictType, nil)
+		db.expired = dict.Create(keyPtrDictType, nil)
+		db.blockingKeys = dict.Create(keyListDictType, nil)
+		db.watchedKeys = dict.Create(keyListDictType, nil)
+		db.readyKeys = dict.Create(objectKeyPointValueDictType, nil)
+		db.id = i
+		db.defragLater = adlist.Create()
+		server.db[i] = db
+	}
+
 	server.el.AeSetBeforeSleepProc(beforeSleep)
 
 	if server.port != 0 {
@@ -391,6 +412,8 @@ func initServerConfig() {
 	server.clientsPendWrite = adlist.Create()
 	server.hz = 0.5
 	server.clientMaxQueryBufLen = 1024 * 1024
+	server.dbnum = 16
+	server.protoMaxBulkLen = 1024 * 1024
 
 	server.commands = dict.Create(commandTableDictType, nil)
 	server.origCommands = dict.Create(commandTableDictType, nil)
@@ -677,7 +700,7 @@ func processCommand(c *Client) error {
 	if c.cmd == nil {
 		ss := make([]sds.SDS, len(c.argv)-1)
 		for i := 1; i < c.argc; i++ {
-			ss[i] = c.argv[i].ptr.(sds.SDS)
+			ss[i-1] = c.argv[i].ptr.(sds.SDS)
 		}
 		args := sds.CatPrintf(ss...)
 		rejectCommandFormat(c, "unknown command `%s`, with args beginning with: %s",
@@ -894,14 +917,105 @@ var commandTableDictType = &dict.Type{
 	KeyDestructor: dictSdsDestructor,
 	ValDestructor: nil,
 }
+var dbDictType = &dict.Type{
+	HashFunction:  dictSdsHash,
+	KeyDup:        nil,
+	ValDup:        nil,
+	KeyCompare:    dictSdsKeyCompare,
+	KeyDestructor: dictSdsDestructor,
+	ValDestructor: dictObjectDestructor,
+}
+var keyPtrDictType = &dict.Type{
+	HashFunction:  dictSdsHash,
+	KeyDup:        nil,
+	ValDup:        nil,
+	KeyCompare:    dictSdsKeyCompare,
+	KeyDestructor: nil,
+	ValDestructor: nil,
+}
+var keyListDictType = &dict.Type{
+	HashFunction:  dictObjHash,
+	KeyDup:        nil,
+	ValDup:        nil,
+	KeyCompare:    dictObjKeyCompare,
+	KeyDestructor: dictObjectDestructor,
+	ValDestructor: dictListDestructor,
+}
+var objectKeyPointValueDictType = &dict.Type{
+	HashFunction:  dictEncObjHash,
+	KeyDup:        nil,
+	ValDup:        nil,
+	KeyCompare:    dictEncObjKeyCompare,
+	KeyDestructor: dictObjectDestructor,
+	ValDestructor: nil,
+}
 
 func dictSdsCaseHash(key unsafe.Pointer) uint64 {
 	return dict.GenCaseHashFunction((*sds.SDS)(key).BufData(0))
 }
+func dictSdsHash(key unsafe.Pointer) uint64 {
+	return dict.GenHashFunction((*sds.SDS)(key).BufData(0))
+}
 func dictSdsKeyCaseCompare(privData interface{}, key1, key2 unsafe.Pointer) bool {
+	return util.BytesCaseCmp((*sds.SDS)(key1).BufData(0), (*sds.SDS)(key2).BufData(0))
+}
+func dictSdsKeyCompare(privData interface{}, key1, key2 unsafe.Pointer) bool {
 	return util.BytesCmp((*sds.SDS)(key1).BufData(0), (*sds.SDS)(key2).BufData(0))
 }
 func dictSdsDestructor(privData interface{}, key unsafe.Pointer) {
+}
+func dictObjectDestructor(privData interface{}, value unsafe.Pointer) {
+	if value == nil {
+		return
+	}
+	(*robj)(value).decrRefCount()
+}
+func dictObjHash(key unsafe.Pointer) uint64 {
+	o := (*robj)(key)
+	s := o.ptr.(sds.SDS)
+	return dict.GenHashFunction(s.BufData(0))
+}
+func dictObjKeyCompare(privData interface{}, _key1, _key2 unsafe.Pointer) bool {
+	key1 := (*robj)(_key1).ptr.(sds.SDS)
+	key2 := (*robj)(_key2).ptr.(sds.SDS)
+	return util.BytesCmp(key1.BufData(0), key2.BufData(0))
+}
+func dictListDestructor(privData interface{}, val unsafe.Pointer) {
+	(*adlist.List)(val).Release()
+}
+func dictEncObjHash(key unsafe.Pointer) uint64 {
+	o := (*robj)(key)
+	if o.sdsEncodedObject() {
+		return dict.GenHashFunction(o.ptr.(sds.SDS).BufData(0))
+	} else if o.getEncoding() == ObjEncodingInt {
+		return dict.GenHashFunction(util.String2Bytes(fmt.Sprintf("%v", o.ptr)))
+	} else {
+		o = o.getDecodedObject()
+		hash := dict.GenHashFunction(o.ptr.(sds.SDS).BufData(0))
+		o.decrRefCount()
+		return hash
+	}
+}
+func dictEncObjKeyCompare(privData interface{}, key1, key2 unsafe.Pointer) bool {
+	o1, o2 := (*robj)(key1), (*robj)(key1)
+	if o1.getEncoding() == ObjEncodingInt && o2.getEncoding() == ObjEncodingInt {
+		return o1.ptr == o2.ptr
+	}
+
+	if o1.refCount != ObjStaticRefCount {
+		o1 = o1.getDecodedObject()
+	}
+	if o2.refCount != ObjStaticRefCount {
+		o2 = o2.getDecodedObject()
+	}
+	cmp := util.BytesCmp(o1.ptr.(sds.SDS).BufData(0), o2.ptr.(sds.SDS).BufData(0))
+	if o1.refCount != ObjStaticRefCount {
+		o1.decrRefCount()
+	}
+	if o2.refCount != ObjStaticRefCount {
+		o2.decrRefCount()
+	}
+	return cmp
 }
 
 func beforeSleep(eventLoop *ae.EventLoop) {

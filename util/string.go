@@ -1,6 +1,7 @@
 package util
 
 import (
+	"bytes"
 	"math/rand"
 	"unsafe"
 )
@@ -26,6 +27,21 @@ func BytesCmp(key1, key2 []byte) bool {
 	if len(key1) != len(key2) {
 		return false
 	}
+
+	for i := 0; i < len(key2); i++ {
+		if key1[i] != key2[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func BytesCaseCmp(key1, key2 []byte) bool {
+	if len(key1) != len(key2) {
+		return false
+	}
+
+	key1, key2 = bytes.ToLower(key1), bytes.ToLower(key2)
 
 	for i := 0; i < len(key2); i++ {
 		if key1[i] != key2[i] {

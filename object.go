@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/pengdafu/redis-golang/sds"
 	"github.com/pengdafu/redis-golang/util"
 	"math"
@@ -37,7 +38,9 @@ const (
 )
 
 const (
-	ObjSharedRefCount = math.MaxInt
+	ObjSharedRefCount       = math.MaxInt
+	ObjStaticRefCount       = ObjSharedRefCount - 1
+	ObjFirstSpecialRefCount = ObjStaticRefCount
 )
 
 type robj struct {
@@ -120,4 +123,45 @@ func createRawStringObject(ptr []byte) *robj {
 func (o *robj) sdsEncodedObject() bool {
 	ed := o.getEncoding()
 	return ed == ObjEncodingRaw || ed == ObjEncodingEmbStr
+}
+
+func (o *robj) decrRefCount() {
+	if o.refCount == 1 {
+		switch o.getType() {
+
+		}
+		//zfree(o)
+	} else {
+		if o.refCount <= 0 {
+			panic("decrRefCount against refCount <= 0")
+		}
+		if o.refCount != ObjSharedRefCount {
+			o.refCount--
+		}
+	}
+}
+
+func (o *robj) incrRefCount() {
+	if o.refCount < ObjFirstSpecialRefCount {
+		o.refCount++
+	} else {
+		if o.refCount == ObjSharedRefCount {
+			// nothing to do
+		} else if o.refCount == ObjStaticRefCount {
+			panic("You tried to retain an object allocated in the stack")
+		}
+	}
+}
+
+func (o *robj) getDecodedObject() *robj {
+	if o.sdsEncodedObject() {
+		o.incrRefCount()
+		return o
+	}
+
+	if o.getType() == ObjString && o.getEncoding() == ObjEncodingInt {
+		llStr := fmt.Sprintf("%v", o.ptr)
+		return createStringObject(llStr)
+	}
+	panic("Unknown encoding type")
 }

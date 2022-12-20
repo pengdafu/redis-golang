@@ -78,6 +78,7 @@ func (l *List) DelNode(node *ListNode) {
 	} else {
 		l.tail = node.prev
 	}
+	l.len--
 }
 
 func (l *List) Last() *ListNode {
@@ -89,4 +90,8 @@ func (l *List) First() *ListNode {
 
 func (l *List) Rewind() *ListIter {
 	return &ListIter{l.head, alStartHead}
+}
+
+func (l *List) Release() {
+
 }

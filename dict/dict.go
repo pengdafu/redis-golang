@@ -1,7 +1,8 @@
 package dict
 
 import (
-	"github.com/dchest/siphash"
+	"bytes"
+	"encoding/binary"
 	"math"
 	"unsafe"
 )
@@ -253,9 +254,100 @@ func SetHashFunctionSeed(seed []byte) {
 }
 
 func GenCaseHashFunction(buf []byte) uint64 {
-	h := siphash.New(dictSeedKey)
-	h.Write(buf)
-	return h.Sum64()
+	return siphash_nocase(dictSeedKey, buf)
+}
+
+func GenHashFunction(buf []byte) uint64 {
+	return siphash(dictSeedKey, buf)
+}
+
+/* SipHash-2-4 */
+// siphash is a function that takes in a key and a message and returns a 64-bit hash
+func siphash(key []byte, message []byte) uint64 {
+	k0 := binary.LittleEndian.Uint64(key[:8])
+	k1 := binary.LittleEndian.Uint64(key[8:])
+
+	b := uint64(len(message)) << 56
+	v0 := k0 ^ 0x736f6d6570736575
+	v1 := k1 ^ 0x646f72616e646f6d
+	v2 := k0 ^ 0x6c7967656e657261
+	v3 := k1 ^ 0x7465646279746573
+	for len(message) >= 8 {
+		m := binary.LittleEndian.Uint64(message)
+		v3 ^= m
+		sipRound(&v0, &v1, &v2, &v3)
+		sipRound(&v0, &v1, &v2, &v3)
+		v0 ^= m
+		message = message[8:]
+	}
+
+	m := b | uint64(message[0])<<48
+	switch len(message) {
+	case 7:
+		m |= uint64(message[6]) << 48
+		fallthrough
+	case 6:
+		m |= uint64(message[5]) << 40
+		fallthrough
+	case 5:
+		m |= uint64(message[4]) << 32
+		fallthrough
+	case 4:
+		m |= uint64(message[3]) << 24
+		fallthrough
+	case 3:
+		m |= uint64(message[2]) << 16
+		fallthrough
+	case 2:
+		m |= uint64(message[1]) << 8
+		fallthrough
+	case 1:
+		m |= uint64(message[0])
+	}
+
+	v3 ^= m
+	sipRound(&v0, &v1, &v2, &v3)
+	sipRound(&v0, &v1, &v2, &v3)
+	v0 ^= m
+	v2 ^= 0xff
+
+	sipRound(&v0, &v1, &v2, &v3)
+	sipRound(&v0, &v1, &v2, &v3)
+	sipRound(&v0, &v1, &v2, &v3)
+	sipRound(&v0, &v1, &v2, &v3)
+
+	return v0 ^ v1 ^ v2 ^ v3
+}
+
+// sipRound is a helper function that performs one round of SipHash-2-4
+// sipRound is a helper function that performs one round of SipHash-2-4
+func sipRound(v0, v1, v2, v3 *uint64) {
+	*v0 += *v1
+	*v1 = (*v1 << 13) | (*v1 >> 51)
+	*v2 += *v3
+	*v3 = (*v3 << 16) | (*v3 >> 48)
+	*v1 ^= *v0
+	*v3 ^= *v2
+	*v0 = (*v0 << 32) | (*v0 >> 32)
+	*v2 += *v1
+	*v1 = (*v1 << 17) | (*v1 >> 47)
+	*v3 += *v0
+	*v0 = (*v0 << 21) | (*v0 >> 43)
+	*v2 ^= *v1
+	*v1 = (*v1 << 32) | (*v1 >> 32)
+}
+
+// siphash_nocase is a function that takes in a key and a message and returns a 64-bit hash,
+// ignoring the case of the message
+func siphash_nocase(key []byte, message []byte) uint64 {
+	// Convert message to lowercase
+	lowerMessage := make([]byte, len(message))
+	for i, b := range message {
+		lowerMessage[i] = bytes.ToLower([]byte{b})[0]
+	}
+
+	// Return hash of lowercase message
+	return siphash(key, lowerMessage)
 }
 
 func (dict *Dict) Add(key, value unsafe.Pointer) bool {
