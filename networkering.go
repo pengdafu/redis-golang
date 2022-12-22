@@ -619,13 +619,44 @@ func addReply(c *Client, o *robj) {
 			_addReplyProtoToList(c, buf)
 		}
 	} else if o.getEncoding() == ObjEncodingInt {
-		buf := fmt.Sprintf("%v", (*int)(o.ptr))
+		buf := fmt.Sprintf("%v", *(*int)(o.ptr))
 		if _addReplyToBuffer(c, buf) != C_OK {
 			_addReplyProtoToList(c, buf)
 		}
 	} else {
 		panic("Wrong obj->encoding in addReply()")
 	}
+}
+
+func addReplyBulk(c *Client, o *robj) {
+	addReplyBulkLen(c, o)
+	addReply(c, o)
+	addReply(c, shared.crlf)
+}
+func addReplyBulkLen(c *Client, o *robj) {
+	slen := o.stringObjectLen()
+	if slen < ObjSharedBulkHdrLen {
+		addReply(c, shared.bulkHdr[slen])
+	} else {
+		addReplyLongLongWithPrefix(c, slen, '$')
+	}
+}
+func addReplyLongLongWithPrefix(c *Client, ll int, prefix byte) {
+	if prefix == '*' && ll < ObjSharedBulkHdrLen && ll > 0 {
+		addReply(c, shared.mBulkHdr[ll])
+		return
+	}
+	if prefix == '$' && ll < ObjSharedBulkHdrLen && ll > 0 {
+		addReply(c, shared.bulkHdr[ll])
+		return
+	}
+	lls := fmt.Sprintf("%d", ll)
+	buf := make([]byte, 1+len(lls)+2)
+	buf[0] = prefix
+	copy(buf[1:], lls)
+	buf[len(lls)+1] = '\r'
+	buf[len(lls)+2] = '\n'
+	addReplyProto(c, util.Bytes2String(buf))
 }
 
 func _addReplyToBuffer[T ByteArrOrString](c *Client, value T) error {

@@ -6,7 +6,19 @@ import (
 )
 
 func getCommand(c *Client) {
+	getGenericCommand(c)
+}
 
+func getGenericCommand(c *Client) {
+	var o *robj
+	if o = c.db.lookupKeyReadOrReply(c, c.argv[1], shared.null[c.resp]); o == nil {
+		return
+	}
+	if o.getType() != ObjString {
+		addReply(c, shared.wrongTypeErr)
+		return
+	}
+	addReplyBulk(c, o)
 }
 
 const (

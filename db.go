@@ -139,3 +139,14 @@ func (db *redisDb) setExpire(c *Client, key *robj, when int64) {
 	//	db.rememberSlaveKeyWithExpire(key)
 	//}
 }
+
+func (db *redisDb) lookupKeyReadOrReply(c *Client, key, reply *robj) *robj {
+	o := db.lookupKeyRead(key)
+	if o == nil {
+		addReply(c, reply)
+	}
+	return o
+}
+func (db *redisDb) lookupKeyRead(key *robj) *robj {
+	return db.lookupKeyWriteWithFlags(key, lookupNone)
+}

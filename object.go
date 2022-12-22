@@ -9,10 +9,11 @@ import (
 )
 
 const (
-	typeBitMask  = 0xF
-	encodingMask = 0xF0
-	lruBitMask   = math.MaxUint32 >> 8 << 8
-	lruBitOffset = 8
+	typeBitMask       = 0xF
+	encodingMask      = 0xF0
+	lruBitMask        = math.MaxUint32 >> 8 << 8
+	lruBitOffset      = 8
+	encodingBitOffset = 4
 )
 
 const (
@@ -58,7 +59,7 @@ func (robj *robj) getType() int {
 }
 
 func (robj *robj) getEncoding() uint32 {
-	return robj.__ & encodingMask
+	return robj.__ & encodingMask >> encodingBitOffset
 }
 
 func (robj *robj) getLru() uint32 {
@@ -68,7 +69,7 @@ func (robj *robj) setType(typ int) {
 	robj.__ |= uint32(typ & typeBitMask)
 }
 func (robj *robj) setEncoding(encoding uint32) {
-	robj.__ |= encoding << typeBitMask & encodingMask
+	robj.__ |= encoding << encodingBitOffset & encodingMask
 }
 func (robj *robj) setLru(lru uint32) {
 	robj.__ |= lru << lruBitOffset & lruBitMask
@@ -266,4 +267,15 @@ func (o *robj) getLongLongFromObject(target *int64) error {
 		*target = value
 	}
 	return C_OK
+}
+
+func (o *robj) stringObjectLen() int {
+	if o.getType() != ObjString {
+		panic("not string obj")
+	}
+
+	if o.sdsEncodedObject() {
+		return sds.Len(*(*sds.SDS)(o.ptr))
+	}
+	return len(fmt.Sprintf("%v", *(*int)(o.ptr)))
 }
