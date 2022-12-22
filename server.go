@@ -141,8 +141,10 @@ const (
 )
 
 const (
-	MaxMemoryFlagLru = 1 << 0
-	MaxMemoryFlagLfu = 1 << 1
+	MaxMemoryFlagLru              = 1 << 0
+	MaxMemoryFlagLfu              = 1 << 1
+	MaxMemoryFlagAllKeys          = 1 << 2
+	MaxMemoryFlagNoSharedIntegers = MaxMemoryFlagLru | MaxMemoryFlagLfu
 )
 
 // server static configuration
@@ -193,7 +195,9 @@ type RedisServer struct {
 	maxclients              int
 	protoMaxBulkLen         int64
 	clientMaxQueryBufLen    int
+	dirty                   int
 	maxMemoryPolicy         int
+	maxMemory               int64
 
 	lruClock uint32
 	hz       float32
@@ -203,13 +207,16 @@ type RedisServer struct {
 	nextClientId uint64
 
 	unixtime   int64
-	ustime     int64 // ms
+	ustime     int64 // 微秒
 	luaTimeout uint32
 
 	clientsPendWrite   *adlist.List
+	readyKeys          *adlist.List
 	aofState           int
 	aofFsync           int
 	statNetOutputBytes int
+
+	rdbChildPid, aofChildPid, moduleChildPid int
 }
 
 const (
@@ -221,6 +228,11 @@ const (
 	aofFsyncOn = iota
 	aofFsyncAlways
 	aofFsyncEverySec
+)
+
+const (
+	unitSeconds      = 0
+	unitMilliSeconds = 1
 )
 
 var server *RedisServer
@@ -293,17 +305,6 @@ type Client struct {
 	bufpos int
 	buf    [PROTO_REPLY_CHUNK_BYTES]byte
 }
-type redisDb struct {
-	dict          *dict.Dict
-	expired       *dict.Dict
-	blockingKeys  *dict.Dict
-	readyKeys     *dict.Dict
-	watchedKeys   *dict.Dict
-	id            int
-	avgTTL        int64
-	expiresCursor uint64
-	defragLater   *adlist.List
-}
 
 const MaxKeysBuffer = 256
 
@@ -374,7 +375,7 @@ func (server *RedisServer) InitServer() {
 	for i := 0; i < server.dbnum; i++ {
 		db := &redisDb{}
 		db.dict = dict.Create(dbDictType, nil)
-		db.expired = dict.Create(keyPtrDictType, nil)
+		db.expires = dict.Create(keyPtrDictType, nil)
 		db.blockingKeys = dict.Create(keyListDictType, nil)
 		db.watchedKeys = dict.Create(keyListDictType, nil)
 		db.readyKeys = dict.Create(objectKeyPointValueDictType, nil)
@@ -410,6 +411,7 @@ func initServerConfig() {
 	server.bindAddrCount = 1
 	server.maxclients = 100
 	server.clientsPendWrite = adlist.Create()
+	server.readyKeys = adlist.Create()
 	server.hz = 0.5
 	server.clientMaxQueryBufLen = 1024 * 1024
 	server.dbnum = 16
@@ -689,22 +691,22 @@ const (
 func processCommand(c *Client) error {
 	moduleCallCommandFilters(c)
 
-	if util.StrCmp(c.argv[0].ptr.(sds.SDS).BufData(0), "quit") {
+	if util.StrCmp((*sds.SDS)(c.argv[0].ptr).BufData(0), "quit") {
 		addReply(c, shared.ok)
 		c.flags |= CLIENT_CLOSE_AFTER_REPLY
 		return C_ERR
 	}
 
-	c.cmd = lookupCommand(c.argv[0].ptr.(sds.SDS))
+	c.cmd = lookupCommand(c.argv[0].ptr)
 	c.lastCmd = c.cmd
 	if c.cmd == nil {
 		ss := make([]sds.SDS, len(c.argv)-1)
 		for i := 1; i < c.argc; i++ {
-			ss[i-1] = c.argv[i].ptr.(sds.SDS)
+			ss[i-1] = *(*sds.SDS)(c.argv[i].ptr)
 		}
 		args := sds.CatPrintf(ss...)
 		rejectCommandFormat(c, "unknown command `%s`, with args beginning with: %s",
-			c.argv[0].ptr.(sds.SDS).BufData(0), args)
+			(*sds.SDS)(c.argv[0].ptr).BufData(0), args)
 		return C_OK
 	} else if (c.cmd.arity > 0 && c.cmd.arity != c.argc) || c.argc < -c.cmd.arity {
 		rejectCommandFormat(c, "wrong number of arguments for '%s' command",
@@ -740,7 +742,7 @@ func call(c *Client, flags int) {
 
 	start := server.ustime
 	c.cmd.proc(c)
-	duration := time.Now().UnixMilli() - start
+	duration := time.Now().UnixMicro() - start
 	if flags&CmdCallStats > 0 {
 		realCmd.calls++
 		realCmd.microseconds += uint64(duration)
@@ -751,7 +753,7 @@ func rejectCommand(c *Client, reply *robj) {
 	flagTransaction(c)
 
 	if c.cmd != nil && c.cmd.name == "exec" {
-		execCommandAbort(c, reply.ptr.(sds.SDS).BufData(0))
+		execCommandAbort(c, (*sds.SDS)(reply.ptr).BufData(0))
 	} else {
 		addReplyErrorObject(c, reply)
 	}
@@ -759,7 +761,7 @@ func rejectCommand(c *Client, reply *robj) {
 
 func addReplyErrorObject(c *Client, reply *robj) {
 	addReply(c, reply)
-	afterErrorReply(c, reply.ptr.(sds.SDS).BufData(0))
+	afterErrorReply(c, (*sds.SDS)(reply.ptr).BufData(0))
 }
 
 func rejectCommandFormat(c *Client, format string, vv ...interface{}) {
@@ -781,8 +783,8 @@ func flagTransaction(c *Client) {
 	}
 }
 
-func lookupCommand(s sds.SDS) *redisCommand {
-	return (*redisCommand)(server.commands.FetchValue(unsafe.Pointer(&s)))
+func lookupCommand(key unsafe.Pointer) *redisCommand {
+	return (*redisCommand)(server.commands.FetchValue(key))
 }
 
 type shareObject struct {
@@ -813,9 +815,9 @@ func createSharedObjects() {
 	shared.czero = createObject(ObjString, sds.NewLen(":0\r\n"))
 	shared.cone = createObject(ObjString, sds.NewLen(":1\r\n"))
 	shared.emptyArray = createObject(ObjString, sds.NewLen("*0\r\n"))
-	shared.pong = createObject(ObjString, "+PONG\r\n")
-	shared.queue = createObject(ObjString, "+QUEUED\r\n")
-	shared.emptyScan = createObject(ObjString, "*2\r\n$1\r\n0\r\n*0\r\n")
+	shared.pong = createObject(ObjString, sds.NewLen("+PONG\r\n"))
+	shared.queue = createObject(ObjString, sds.NewLen("+QUEUED\r\n"))
+	shared.emptyScan = createObject(ObjString, sds.NewLen("*2\r\n$1\r\n0\r\n*0\r\n"))
 	shared.wrongTypeErr = createObject(ObjString, sds.NewLen(
 		"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"))
 	shared.noKeyErr = createObject(ObjString, sds.NewLen("-ERR no such key\r\n"))
@@ -898,8 +900,8 @@ func createSharedObjects() {
 		shared.integers[j].setEncoding(ObjEncodingInt)
 	}
 	for j := 0; j < ObjSharedBulkHdrLen; j++ {
-		shared.mBulkHdr[j] = createObject(ObjString, fmt.Sprintf("*%d\r\n", j))
-		shared.bulkHdr[j] = createObject(ObjString, fmt.Sprintf("$%d\r\n", j))
+		shared.mBulkHdr[j] = createObject(ObjString, sds.NewLen(fmt.Sprintf("*%d\r\n", j)))
+		shared.bulkHdr[j] = createObject(ObjString, sds.NewLen(fmt.Sprintf("$%d\r\n", j)))
 	}
 	/* The following two shared objects, minstring and maxstrings, are not
 	 * actually used for their value but as a special object meaning
@@ -971,13 +973,11 @@ func dictObjectDestructor(privData interface{}, value unsafe.Pointer) {
 	(*robj)(value).decrRefCount()
 }
 func dictObjHash(key unsafe.Pointer) uint64 {
-	o := (*robj)(key)
-	s := o.ptr.(sds.SDS)
-	return dict.GenHashFunction(s.BufData(0))
+	return dict.GenHashFunction((*sds.SDS)((*robj)(key).ptr).BufData(0))
 }
 func dictObjKeyCompare(privData interface{}, _key1, _key2 unsafe.Pointer) bool {
-	key1 := (*robj)(_key1).ptr.(sds.SDS)
-	key2 := (*robj)(_key2).ptr.(sds.SDS)
+	key1 := (*sds.SDS)((*robj)(_key1).ptr)
+	key2 := (*sds.SDS)((*robj)(_key2).ptr)
 	return util.BytesCmp(key1.BufData(0), key2.BufData(0))
 }
 func dictListDestructor(privData interface{}, val unsafe.Pointer) {
@@ -986,12 +986,12 @@ func dictListDestructor(privData interface{}, val unsafe.Pointer) {
 func dictEncObjHash(key unsafe.Pointer) uint64 {
 	o := (*robj)(key)
 	if o.sdsEncodedObject() {
-		return dict.GenHashFunction(o.ptr.(sds.SDS).BufData(0))
+		return dict.GenHashFunction((*sds.SDS)(o.ptr).BufData(0))
 	} else if o.getEncoding() == ObjEncodingInt {
-		return dict.GenHashFunction(util.String2Bytes(fmt.Sprintf("%v", o.ptr)))
+		return dict.GenHashFunction(util.String2Bytes(fmt.Sprintf("%v", *(*int)(o.ptr))))
 	} else {
 		o = o.getDecodedObject()
-		hash := dict.GenHashFunction(o.ptr.(sds.SDS).BufData(0))
+		hash := dict.GenHashFunction((*sds.SDS)(o.ptr).BufData(0))
 		o.decrRefCount()
 		return hash
 	}
@@ -999,7 +999,7 @@ func dictEncObjHash(key unsafe.Pointer) uint64 {
 func dictEncObjKeyCompare(privData interface{}, key1, key2 unsafe.Pointer) bool {
 	o1, o2 := (*robj)(key1), (*robj)(key1)
 	if o1.getEncoding() == ObjEncodingInt && o2.getEncoding() == ObjEncodingInt {
-		return o1.ptr == o2.ptr
+		return *(*int)(o1.ptr) == *(*int)(o2.ptr)
 	}
 
 	if o1.refCount != ObjStaticRefCount {
@@ -1008,7 +1008,7 @@ func dictEncObjKeyCompare(privData interface{}, key1, key2 unsafe.Pointer) bool 
 	if o2.refCount != ObjStaticRefCount {
 		o2 = o2.getDecodedObject()
 	}
-	cmp := util.BytesCmp(o1.ptr.(sds.SDS).BufData(0), o2.ptr.(sds.SDS).BufData(0))
+	cmp := util.BytesCmp((*sds.SDS)(o1.ptr).BufData(0), (*sds.SDS)(o2.ptr).BufData(0))
 	if o1.refCount != ObjStaticRefCount {
 		o1.decrRefCount()
 	}
@@ -1020,4 +1020,15 @@ func dictEncObjKeyCompare(privData interface{}, key1, key2 unsafe.Pointer) bool 
 
 func beforeSleep(eventLoop *ae.EventLoop) {
 	handleClientsWithPendingWrites()
+}
+
+func hasActiveChildProcess() bool {
+	return server.rdbChildPid != -1 || server.aofChildPid != -1 || server.moduleChildPid != -1
+}
+
+func mstime() int64 {
+	return time.Now().UnixMilli()
+}
+func ustime() int64 {
+	return time.Now().UnixMicro()
 }

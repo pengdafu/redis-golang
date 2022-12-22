@@ -47,7 +47,7 @@ func (dict *Dict) init(typ *Type, privData interface{}) {
 	dict.rehashIdx = -1
 	dict.iterators = 0
 }
-func (dict *Dict) addRaw(key unsafe.Pointer, existing **dictEntry) *dictEntry {
+func (dict *Dict) addRaw(key unsafe.Pointer, existing **Entry) *Entry {
 	if dict.isRehashing() {
 		dict.rehashStep()
 	}
@@ -61,7 +61,7 @@ func (dict *Dict) addRaw(key unsafe.Pointer, existing **dictEntry) *dictEntry {
 	if dict.isRehashing() {
 		ht = &dict.ht[1]
 	}
-	entry := new(dictEntry)
+	entry := new(Entry)
 	entry.next = ht.table[index]
 	ht.table[index] = entry
 	ht.used++
@@ -70,22 +70,12 @@ func (dict *Dict) addRaw(key unsafe.Pointer, existing **dictEntry) *dictEntry {
 	return entry
 }
 
-func (dict *Dict) setKey(entry *dictEntry, key unsafe.Pointer) {
+func (dict *Dict) setKey(entry *Entry, key unsafe.Pointer) {
 	if dict.typ.KeyDup != nil {
 		entry.key = dict.typ.KeyDup(dict.privData, key)
 	} else {
 		entry.key = key
 	}
-}
-func (dict *Dict) setVal(entry *dictEntry, obj unsafe.Pointer) {
-	if dict.typ.ValDup != nil {
-		entry.v.val = dict.typ.ValDup(dict.privData, obj)
-	} else {
-		entry.v.val = obj
-	}
-}
-func (dict *Dict) getVal(entry *dictEntry) unsafe.Pointer {
-	return entry.v.val
 }
 
 func (dict *Dict) isRehashing() bool {
@@ -105,7 +95,7 @@ func (dict *Dict) expand(size int64) bool {
 	n.size = realSize
 	n.sizeMask = uint64(realSize - 1)
 	n.used = 0
-	n.table = make([]*dictEntry, realSize)
+	n.table = make([]*Entry, realSize)
 	if dict.ht[0].table == nil {
 		dict.ht[0] = n
 		return true
@@ -143,7 +133,7 @@ func (dict *Dict) expandIfNeeded() bool {
 	return true
 }
 
-func (dict *Dict) keyIndex(key unsafe.Pointer, hash uint64, existing **dictEntry) int {
+func (dict *Dict) keyIndex(key unsafe.Pointer, hash uint64, existing **Entry) int {
 	if existing != nil {
 		*existing = nil
 	}
@@ -222,30 +212,6 @@ func (dict *Dict) rehash(n int) {
 
 func (dict *Dict) size() int64 {
 	return dict.ht[0].used + dict.ht[1].used
-}
-func (dict *Dict) find(key unsafe.Pointer) *dictEntry {
-	if dict.size() == 0 {
-		return nil
-	}
-	if dict.isRehashing() {
-		dict.rehashStep()
-	}
-
-	h := dict.hashKey(key)
-	for table := 0; table < 2; table++ {
-		idx := h & dict.ht[table].sizeMask
-		he := dict.ht[table].table[idx]
-		for he != nil {
-			if he.key == key || dict.compareKey(key, he.key) {
-				return he
-			}
-			he = he.next
-		}
-		if !dict.isRehashing() {
-			return nil
-		}
-	}
-	return nil
 }
 
 func SetHashFunctionSeed(seed []byte) {
@@ -356,14 +322,102 @@ func (dict *Dict) Add(key, value unsafe.Pointer) bool {
 		return false
 	}
 
-	dict.setVal(entry, value)
+	dict.SetVal(entry, value)
 	return true
 }
 
 func (dict *Dict) FetchValue(key unsafe.Pointer) unsafe.Pointer {
-	he := dict.find(key)
+	he := dict.Find(key)
 	if he != nil {
-		return dict.getVal(he)
+		return dict.GetVal(he)
 	}
 	return nil
+}
+func (dict *Dict) Find(key unsafe.Pointer) *Entry {
+	if dict.size() == 0 {
+		return nil
+	}
+	if dict.isRehashing() {
+		dict.rehashStep()
+	}
+
+	h := dict.hashKey(key)
+	for table := 0; table < 2; table++ {
+		idx := h & dict.ht[table].sizeMask
+		he := dict.ht[table].table[idx]
+		for he != nil {
+			if he.key == key || dict.compareKey(key, he.key) {
+				return he
+			}
+			he = he.next
+		}
+		if !dict.isRehashing() {
+			return nil
+		}
+	}
+	return nil
+}
+func (dict *Dict) SetVal(entry *Entry, obj unsafe.Pointer) {
+	if dict.typ.ValDup != nil {
+		entry.v.val = dict.typ.ValDup(dict.privData, obj)
+	} else {
+		entry.v.val = obj
+	}
+}
+func (dict *Dict) GetVal(entry *Entry) unsafe.Pointer {
+	return entry.v.val
+}
+func (dict *Dict) SetSignedInterVal(entry *Entry, val int64) {
+	entry.v.s64 = val
+}
+
+func (dict *Dict) Delete(key unsafe.Pointer) {
+	dict.GenericDelete(key, false)
+}
+
+func (dict *Dict) GenericDelete(key unsafe.Pointer, nofree bool) *Entry {
+	if dict.ht[0].used == 0 && dict.ht[1].used == 0 {
+		return nil
+	}
+
+	if dict.isRehashing() {
+		dict.rehashStep()
+	}
+
+	h := dict.hashKey(key)
+	var prevHe *Entry
+	for table := 0; table < 2; table++ {
+		idx := h & dict.ht[table].sizeMask
+		he := dict.ht[table].table[idx]
+		prevHe = nil
+		for he != nil {
+			if key == he.key || dict.compareKey(key, he.key) {
+				if prevHe != nil {
+					prevHe.next = he.next
+				} else {
+					dict.ht[table].table[idx] = he.next
+				}
+				if !nofree {
+
+				}
+				dict.ht[table].used--
+				return he
+			}
+			prevHe = he
+			he = he.next
+		}
+		if !dict.isRehashing() {
+			break
+		}
+	}
+	return nil
+}
+
+func (dict *Dict) AddOrFind(key unsafe.Pointer) *Entry {
+	existing := &Entry{}
+	entry := dict.addRaw(key, &existing)
+	if entry != nil {
+		return entry
+	}
+	return existing
 }

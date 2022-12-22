@@ -1,7 +1,7 @@
 package dict
 
 type dictHt struct {
-	table      []*dictEntry
+	table      []*Entry
 	size, used int64
 	sizeMask   uint64
 }

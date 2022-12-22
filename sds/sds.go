@@ -85,24 +85,6 @@ func sdsReqType(strSiz int) uint8 {
 	return Type64
 }
 
-func sdsavail(s SDS) int {
-	sdsType := s.buf[flagOffset] & TypeMask
-	hdrSize := sdsHdrSize(sdsType)
-	switch sdsType {
-	case Type5:
-		return 0
-	case Type8:
-		return cap(s.buf) - int(s.buf[lenOffset]) - hdrSize
-	case Type16:
-		return cap(s.buf) - int(binary.BigEndian.Uint16(s.buf[lenOffset:])) - hdrSize
-	case Type32:
-		return cap(s.buf) - int(binary.BigEndian.Uint32(s.buf[lenOffset:])) - hdrSize
-	case Type64:
-		return cap(s.buf) - int(binary.BigEndian.Uint64(s.buf[lenOffset:])) - hdrSize
-	}
-	return 0
-}
-
 func sdssetlen(s SDS, newlen int) {
 	switch s.buf[flagOffset] & TypeMask {
 	case Type5:
@@ -171,7 +153,7 @@ func Empty() SDS {
 }
 
 // sdsnewlen (init string, initlen int)
-func NewLen(init string) SDS {
+func NewLen[T []byte | string](init T) SDS {
 	initlen := len(init)
 	sdsType := sdsReqType(initlen)
 	if sdsType == Type5 && initlen == 0 {
@@ -199,7 +181,7 @@ func NewLen(init string) SDS {
 		binary.BigEndian.PutUint64(s[lenOffset:], uint64(initlen))
 	}
 
-	if initlen > 0 && init != "" {
+	if initlen > 0 {
 		copy(s[hdrSize:], init)
 	}
 
@@ -227,7 +209,7 @@ func Len(s SDS) int {
 }
 
 func MakeRoomFor(s SDS, addLen int) SDS {
-	avail := sdsavail(s)
+	avail := Avail(s)
 	if avail > addLen {
 		return s
 	}
@@ -450,4 +432,52 @@ func CatPrintf(ss ...SDS) string {
 		ret = append(ret, util.Bytes2String(s.BufData(0)))
 	}
 	return strings.Join(ret, ",")
+}
+
+func Avail(s SDS) int {
+	sdsType := s.buf[flagOffset] & TypeMask
+	hdrSize := sdsHdrSize(sdsType)
+	switch sdsType {
+	case Type5:
+		return 0
+	case Type8:
+		return cap(s.buf) - int(s.buf[lenOffset]) - hdrSize
+	case Type16:
+		return cap(s.buf) - int(binary.BigEndian.Uint16(s.buf[lenOffset:])) - hdrSize
+	case Type32:
+		return cap(s.buf) - int(binary.BigEndian.Uint32(s.buf[lenOffset:])) - hdrSize
+	case Type64:
+		return cap(s.buf) - int(binary.BigEndian.Uint64(s.buf[lenOffset:])) - hdrSize
+	}
+	return 0
+}
+
+func RemoveFreeSpace(s SDS) SDS {
+	oldHdrLen := sdsHdrSize(s.buf[flagOffset])
+	oldType := s.buf[flagOffset] & TypeMask
+	slen := Len(s)
+	avail := Avail(s)
+
+	if avail == 0 {
+		return s
+	}
+
+	sdsType := sdsReqType(slen)
+	hdrLen := sdsHdrSize(sdsType)
+
+	var buf []byte
+	if oldType == sdsType || sdsType > Type8 {
+		buf = make([]byte, oldHdrLen+slen)
+		hdrLen = oldHdrLen
+	} else {
+		buf = make([]byte, hdrLen+slen)
+	}
+	copy(buf[hdrLen:], s.BufData(0))
+	s = SDS{buf}
+	sdssetlen(s, slen)
+	return s
+}
+
+func Dup(s SDS) SDS {
+	return NewLen(s.BufData(0))
 }

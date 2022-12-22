@@ -5,6 +5,7 @@ import (
 	"github.com/pengdafu/redis-golang/util"
 	"log"
 	"os"
+	"runtime/debug"
 	"time"
 )
 
@@ -180,6 +181,7 @@ func (el *EventLoop) AeMain() {
 	defer func() {
 		if err := recover(); err != nil {
 			log.Println("recovery err: ", err)
+			debug.PrintStack()
 			os.Exit(1)
 		}
 	}()

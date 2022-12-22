@@ -3,6 +3,8 @@ package util
 import (
 	"bytes"
 	"math/rand"
+	"strconv"
+	"strings"
 	"unsafe"
 )
 
@@ -21,6 +23,11 @@ func StrCmp[T []byte | string](s T, d string) bool {
 		return true
 	}
 	return false
+}
+
+func StrCaseCmp[T []byte | string](s T, d string) bool {
+	t := string(s)
+	return strings.ToLower(t) == strings.ToLower(d)
 }
 
 func BytesCmp(key1, key2 []byte) bool {
@@ -57,4 +64,14 @@ func GetRandomBytes(needLen int) []byte {
 		ret[i] = byte(rand.Intn(255))
 	}
 	return ret
+}
+
+func String2Int64[T []byte | string](str T, v *int64) bool {
+	i, err := strconv.ParseInt(string(str), 10, 64)
+	if err != nil {
+		return false
+	}
+
+	*v = i
+	return true
 }

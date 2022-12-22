@@ -614,12 +614,12 @@ func addReply(c *Client, o *robj) {
 	}
 
 	if o.sdsEncodedObject() {
-		buf := o.ptr.(sds.SDS).BufData(0)
+		buf := (*sds.SDS)(o.ptr).BufData(0)
 		if _addReplyToBuffer(c, buf) != C_OK {
 			_addReplyProtoToList(c, buf)
 		}
 	} else if o.getEncoding() == ObjEncodingInt {
-		buf := fmt.Sprintf("%v", o.ptr)
+		buf := fmt.Sprintf("%v", (*int)(o.ptr))
 		if _addReplyToBuffer(c, buf) != C_OK {
 			_addReplyProtoToList(c, buf)
 		}

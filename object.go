@@ -5,6 +5,7 @@ import (
 	"github.com/pengdafu/redis-golang/sds"
 	"github.com/pengdafu/redis-golang/util"
 	"math"
+	"unsafe"
 )
 
 const (
@@ -45,7 +46,7 @@ const (
 
 type robj struct {
 	refCount int
-	ptr      interface{}
+	ptr      unsafe.Pointer //*int|*sds.SDS
 
 	// 4bit type, 4bit encoding,
 	// 24bit lru(lru time or lfu data(8bit frq and 16bit time))
@@ -56,12 +57,12 @@ func (robj *robj) getType() int {
 	return int(robj.__ & typeBitMask)
 }
 
-func (robj *robj) getEncoding() int {
-	return int(robj.__ & encodingMask)
+func (robj *robj) getEncoding() uint32 {
+	return robj.__ & encodingMask
 }
 
-func (robj *robj) getLru() int {
-	return int(robj.__ >> lruBitOffset)
+func (robj *robj) getLru() uint32 {
+	return robj.__ >> lruBitOffset
 }
 func (robj *robj) setType(typ int) {
 	robj.__ |= uint32(typ & typeBitMask)
@@ -78,11 +79,11 @@ func (robj *robj) makeObjectShared() *robj {
 	return robj
 }
 
-func createObject(typ int, ptr interface{}) *robj {
+func createObject[T sds.SDS | int | int64](typ int, ptr T) *robj {
 	o := new(robj)
 	o.setType(typ)
 	o.setEncoding(ObjEncodingRaw)
-	o.ptr = ptr
+	o.ptr = unsafe.Pointer(&ptr)
 	o.refCount = 1
 
 	if server.maxMemoryPolicy&MaxMemoryFlagLfu > 0 {
@@ -118,6 +119,24 @@ func createEmbeddedStringObject(ptr []byte) *robj {
 }
 func createRawStringObject(ptr []byte) *robj {
 	return createObject(ObjString, sds.NewLen(util.Bytes2String(ptr)))
+}
+func createStringObjFromLongLongForValue(v int64) *robj {
+	return createStringObjectFromLongLongWithOptions(v, 1)
+}
+func createStringObjectFromLongLongWithOptions(v int64, vobj int) *robj {
+	if server.maxMemory == 0 || server.maxMemoryPolicy&MaxMemoryFlagNoSharedIntegers == 0 {
+		vobj = 0
+	}
+
+	if v >= 0 && v < ObjSharedIntegers && vobj == 0 {
+		shared.integers[v].incrRefCount()
+		return shared.integers[v]
+	} else {
+		o := createObject(ObjString, v)
+		o.setEncoding(ObjEncodingInt)
+		o.ptr = unsafe.Pointer(&v)
+		return o
+	}
 }
 
 func (o *robj) sdsEncodedObject() bool {
@@ -160,8 +179,91 @@ func (o *robj) getDecodedObject() *robj {
 	}
 
 	if o.getType() == ObjString && o.getEncoding() == ObjEncodingInt {
-		llStr := fmt.Sprintf("%v", o.ptr)
+		llStr := fmt.Sprintf("%v", *(*int)(o.ptr))
 		return createStringObject(llStr)
 	}
 	panic("Unknown encoding type")
+}
+
+func (o *robj) tryObjectEncoding() *robj {
+	if !o.sdsEncodedObject() {
+		return o
+	}
+
+	s := *(*sds.SDS)(o.ptr)
+	if o.refCount > 1 {
+		return o
+	}
+
+	slen := sds.Len(s)
+	var value int64
+	if slen <= 20 && util.String2Int64(s.BufData(0), &value) {
+		if (server.maxMemory == 0 || server.maxMemoryPolicy&MaxMemoryFlagNoSharedIntegers == 0) &&
+			value >= 0 && value < ObjSharedIntegers {
+			o.decrRefCount()
+			shared.integers[value].incrRefCount()
+			return shared.integers[value]
+		} else {
+			if o.getEncoding() == ObjEncodingRaw {
+				o.setEncoding(ObjEncodingInt)
+				o.ptr = unsafe.Pointer(&value)
+				return o
+			} else if o.getEncoding() == ObjEncodingEmbStr {
+				o.decrRefCount()
+				return createStringObjFromLongLongForValue(value)
+			}
+		}
+	}
+
+	if slen <= ObjEncodingEmbStrLimitSize {
+		if o.getEncoding() == ObjEncodingEmbStr {
+			return o
+		}
+		o.decrRefCount()
+		return createEmbeddedStringObject(s.BufData(0))
+	}
+	o.trimStringObjectIfNeeded()
+	return o
+}
+
+func (o *robj) trimStringObjectIfNeeded() {
+	s := *(*sds.SDS)(o.ptr)
+	if o.getEncoding() == ObjEncodingRaw && sds.Avail(s) > sds.Len(s)/10 {
+		n := sds.RemoveFreeSpace(s)
+		o.ptr = unsafe.Pointer(&n)
+	}
+}
+
+func (o *robj) getLongLongFromObjectOrReply(c *Client, target *int64, msg string) error {
+	var value int64
+	if o.getLongLongFromObject(&value) != C_OK {
+		if msg != "" {
+			addReplyError(c, msg)
+		} else {
+			addReplyError(c, "value is not an integer or out of range")
+		}
+		return C_ERR
+	}
+	*target = value
+	return C_OK
+}
+func (o *robj) getLongLongFromObject(target *int64) error {
+	var value int64
+	if o == nil {
+		value = 0
+	} else {
+		if o.sdsEncodedObject() {
+			if !util.String2Int64((*sds.SDS)(o.ptr).BufData(0), &value) {
+				return C_ERR
+			}
+		} else if o.getEncoding() == ObjEncodingInt {
+			value = int64(*(*int)(o.ptr))
+		} else {
+			panic("Unknown string encoding")
+		}
+	}
+	if target != nil {
+		*target = value
+	}
+	return C_OK
 }
