@@ -210,7 +210,7 @@ func (dict *Dict) rehash(n int) {
 	}
 }
 
-func (dict *Dict) size() int64 {
+func (dict *Dict) Size() int64 {
 	return dict.ht[0].used + dict.ht[1].used
 }
 
@@ -238,13 +238,14 @@ func siphash(key []byte, message []byte) uint64 {
 	v1 := k1 ^ 0x646f72616e646f6d
 	v2 := k0 ^ 0x6c7967656e657261
 	v3 := k1 ^ 0x7465646279746573
-	for len(message) >= 8 {
-		m := binary.LittleEndian.Uint64(message)
+	tmpMessage := message
+	for len(tmpMessage) >= 8 {
+		m := binary.LittleEndian.Uint64(tmpMessage)
 		v3 ^= m
 		sipRound(&v0, &v1, &v2, &v3)
 		sipRound(&v0, &v1, &v2, &v3)
 		v0 ^= m
-		message = message[8:]
+		tmpMessage = tmpMessage[8:]
 	}
 
 	m := b | uint64(message[0])<<48
@@ -334,7 +335,7 @@ func (dict *Dict) FetchValue(key unsafe.Pointer) unsafe.Pointer {
 	return nil
 }
 func (dict *Dict) Find(key unsafe.Pointer) *Entry {
-	if dict.size() == 0 {
+	if dict.Size() == 0 {
 		return nil
 	}
 	if dict.isRehashing() {
@@ -371,8 +372,8 @@ func (dict *Dict) SetSignedInterVal(entry *Entry, val int64) {
 	entry.v.s64 = val
 }
 
-func (dict *Dict) Delete(key unsafe.Pointer) {
-	dict.GenericDelete(key, false)
+func (dict *Dict) Delete(key unsafe.Pointer) bool {
+	return dict.GenericDelete(key, false) != nil
 }
 
 func (dict *Dict) GenericDelete(key unsafe.Pointer, nofree bool) *Entry {

@@ -108,3 +108,29 @@ func setGenericCommand(c *Client, flags int, key, val, expire *robj, unit int, o
 	}
 	addReply(c, reply)
 }
+
+func delCommand(c *Client) {
+	delGenericCommand(c, server.lazyFreeLazyUserDel)
+}
+func unlinkCommand(c *Client) {
+	delGenericCommand(c, true)
+}
+
+func delGenericCommand(c *Client, lazy bool) {
+	var numDel int
+	for i := 1; i < c.argc; i++ {
+		c.db.expireIfNeeded(c.argv[i])
+		deleteFn := dbASyncDelete
+		if !lazy {
+			deleteFn = dbSyncDelete
+		}
+		deleted := deleteFn(c.db, c.argv[i])
+		if deleted {
+			signalModifiedKey(c, c.db, c.argv[i])
+			notifyKeySpaceEvent(notifyGeneric, "del", c.argv[i], c.db.id)
+			server.dirty++
+			numDel++
+		}
+	}
+	addReplyLongLong(c, numDel)
+}

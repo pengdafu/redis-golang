@@ -12,7 +12,6 @@ import (
 	"log"
 	"os"
 	"strings"
-	"syscall"
 	"time"
 	"unsafe"
 )
@@ -188,6 +187,7 @@ type RedisServer struct {
 	clients                 []*Client
 	currentClient           *Client
 	clusterEnabled          bool
+	lazyFreeLazyUserDel     bool
 	statRejectedConn        uint64 // 拒绝客户端连接的次数
 	statNumConnections      uint64 // 成功连接客户端的次数
 	statTotalReadsProcessed uint64 // 成功处理read的次数
@@ -427,10 +427,7 @@ func (server *RedisServer) Start() {
 }
 
 func (server *RedisServer) Stop() {
-	server.el.Stop = 1
-	for i := 0; i < server.ipfd.count; i++ {
-		syscall.Close(server.ipfd.fd[i])
-	}
+	server.el.AeDeleteEventLoop()
 }
 
 func (server *RedisServer) serverCron(el *ae.EventLoop, id uint64, clientData interface{}) int {
@@ -507,6 +504,12 @@ var redisCommandTable = []redisCommand{
 	{"exec", execCommand, 1,
 		"no-script no-monitor no-slowlog ok-loading ok-stale @transaction",
 		0, nil, 0, 0, 0, 0, 0, 0},
+	{"del", delCommand, -2,
+		"write @keyspace",
+		0, nil, 1, -1, 1, 0, 0, 0},
+	{"unlink", unlinkCommand, -2,
+		"write fast @keyspace",
+		0, nil, 1, -1, 1, 0, 0, 0},
 }
 
 func populateCommandTable() {

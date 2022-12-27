@@ -107,3 +107,8 @@ func aeApiAddEvent(el *EventLoop, fd, mask int) error {
 func aeApiName() string {
 	return "kqueue"
 }
+
+func aeApiFree(el *EventLoop) {
+	state := el.ApiData.(*aeApiState)
+	syscall.Close(state.KqFd)
+}

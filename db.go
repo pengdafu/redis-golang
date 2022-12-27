@@ -67,6 +67,11 @@ func (db *redisDb) expireIfNeeded(key *robj) bool {
 	return false
 }
 
+// todo
+func signalModifiedKey(c *Client, db *redisDb, key *robj) {
+
+}
+
 func updateLFU(val *robj) {
 	// todo
 }
@@ -116,12 +121,15 @@ func (db *redisDb) dbAdd(key, val *robj) {
 	}
 
 	if server.clusterEnabled {
-		slotToKeyAdd((*sds.SDS)(key.ptr))
+		slotToKeyAdd(key.ptr)
 	}
 }
 
 // todo
-func slotToKeyAdd(key *sds.SDS) {
+func slotToKeyAdd(key unsafe.Pointer) {
+
+}
+func slotToKeyDel(key unsafe.Pointer) {
 
 }
 
@@ -149,4 +157,17 @@ func (db *redisDb) lookupKeyReadOrReply(c *Client, key, reply *robj) *robj {
 }
 func (db *redisDb) lookupKeyRead(key *robj) *robj {
 	return db.lookupKeyWriteWithFlags(key, lookupNone)
+}
+
+func dbSyncDelete(db *redisDb, key *robj) bool {
+	if db.expires.Size() > 0 {
+		db.expires.Delete(key.ptr)
+	}
+	if db.dict.Delete(key.ptr) {
+		if server.clusterEnabled {
+			slotToKeyDel(key.ptr)
+		}
+		return true
+	}
+	return false
 }

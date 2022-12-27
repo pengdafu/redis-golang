@@ -191,6 +191,11 @@ func (el *EventLoop) AeMain() {
 	}
 }
 
+func (el *EventLoop) AeDeleteEventLoop() {
+	el.Stop = 1
+	aeApiFree(el)
+}
+
 func aeProcessEvent(el *EventLoop, flags int) (processed int) {
 	var numevents int
 

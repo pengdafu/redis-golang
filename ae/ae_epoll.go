@@ -114,3 +114,8 @@ func aeApiDelEvent(el *EventLoop, fd, delmask int) {
 func aeApiName() string {
 	return "epoll"
 }
+
+func aeApiFree(el *EventLoop) {
+	state := el.ApiData.(*aeApiState)
+	syscall.Close(state.Epfd)
+}

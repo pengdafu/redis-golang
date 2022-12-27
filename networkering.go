@@ -641,6 +641,15 @@ func addReplyBulkLen(c *Client, o *robj) {
 		addReplyLongLongWithPrefix(c, slen, '$')
 	}
 }
+func addReplyLongLong(c *Client, ll int) {
+	if ll == 0 {
+		addReply(c, shared.czero)
+	} else if ll == 1 {
+		addReply(c, shared.cone)
+	} else {
+		addReplyLongLongWithPrefix(c, ll, ':')
+	}
+}
 func addReplyLongLongWithPrefix(c *Client, ll int, prefix byte) {
 	if prefix == '*' && ll < ObjSharedBulkHdrLen && ll > 0 {
 		addReply(c, shared.mBulkHdr[ll])
