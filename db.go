@@ -63,8 +63,77 @@ func (db *redisDb) lookupKey(key *robj, flags int) *robj {
 }
 
 func (db *redisDb) expireIfNeeded(key *robj) bool {
-	// todo expire
+	if !db.keyIsExpired(key) {
+		return false
+	}
+
+	if server.masterhost != "" {
+		return true
+	}
+
+	server.statExpiredKeys++
+	db.propagateExpire(key, server.lazyFreeLazyExpire)
+	notifyKeySpaceEvent(notifyExpired, "expired", key, db.id)
+	delFn := dbASyncDelete
+	if !server.lazyFreeLazyExpire {
+		delFn = dbSyncDelete
+	}
+	if delFn(db, key) {
+		signalModifiedKey(nil, db, key)
+		return true
+	}
 	return false
+}
+
+func (db *redisDb) propagateExpire(key *robj, lazy bool) {
+	argv := [2]*robj{}
+	argv[0] = shared.unlink
+	if !lazy {
+		argv[0] = shared.del
+	}
+	argv[1] = key
+	argv[0].incrRefCount()
+	argv[1].incrRefCount()
+
+	if server.aofState != aofOff {
+		feedAppendOnlyFile(server.delCommand, db.id, argv[:], 2)
+	}
+	replicationFeedSlaves(server.slaves, db.id, argv[:], 2)
+	argv[0].decrRefCount()
+	argv[1].decrRefCount()
+}
+
+func (db *redisDb) keyIsExpired(key *robj) bool {
+	when := db.getExpire(key)
+	if when < 0 {
+		return false
+	}
+
+	if server.loading {
+		return false
+	}
+
+	now := int64(0)
+	if server.luaCaller {
+		now = server.luaTimeStart
+	} else if server.fixedTimeExpire > 0 {
+		now = server.mstime
+	} else {
+		now = mstime()
+	}
+	return now > when
+}
+
+func (db *redisDb) getExpire(key *robj) int64 {
+	if db.expires.Size() == 0 {
+		return -1
+	}
+
+	de := db.expires.Find(key.ptr)
+	if de == nil {
+		return -1
+	}
+	return dict.GetSignedIntegerVal(de)
 }
 
 // todo
@@ -140,7 +209,7 @@ func (db *redisDb) setExpire(c *Client, key *robj, when int64) {
 	}
 
 	de := db.expires.AddOrFind(key.ptr)
-	db.expires.SetSignedInterVal(de, when)
+	dict.SetSignedIntegerVal(de, when)
 
 	//writableSlave := server.masterHost != "" && server.replSlaveRo == 0
 	//if c != nil && writableSlave && c.flags&CLIENT_MASTER == 0 {

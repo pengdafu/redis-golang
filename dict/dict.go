@@ -368,8 +368,11 @@ func (dict *Dict) SetVal(entry *Entry, obj unsafe.Pointer) {
 func (dict *Dict) GetVal(entry *Entry) unsafe.Pointer {
 	return entry.v.val
 }
-func (dict *Dict) SetSignedInterVal(entry *Entry, val int64) {
+func SetSignedIntegerVal(entry *Entry, val int64) {
 	entry.v.s64 = val
+}
+func GetSignedIntegerVal(enter *Entry) int64 {
+	return enter.v.s64
 }
 
 func (dict *Dict) Delete(key unsafe.Pointer) bool {

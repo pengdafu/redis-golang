@@ -6,7 +6,6 @@ import (
 	"github.com/pengdafu/redis-golang/anet"
 	"github.com/pengdafu/redis-golang/util"
 	"syscall"
-	"time"
 )
 
 type aeApiState struct {
@@ -42,8 +41,8 @@ func aeApiPoll(el *EventLoop, tvp *util.TimeVal) (numevents int) {
 		numevents = n
 	} else {
 		n, err := syscall.Kevent(state.KqFd, nil, state.Events, &syscall.Timespec{
-			Sec:  int64(tvp.Duration / time.Second),
-			Nsec: int64((tvp.Duration % time.Second) / time.Nanosecond),
+			Sec:  tvp.Sec,
+			Nsec: tvp.Usec * 1e3,
 		})
 		if err != nil {
 			return 0

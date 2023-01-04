@@ -171,7 +171,8 @@ type socketFds struct {
 	count int
 }
 type RedisServer struct {
-	el *ae.EventLoop
+	el         *ae.EventLoop
+	masterhost string
 
 	commands     *dict.Dict
 	origCommands *dict.Dict
@@ -188,9 +189,12 @@ type RedisServer struct {
 	currentClient           *Client
 	clusterEnabled          bool
 	lazyFreeLazyUserDel     bool
+	lazyFreeLazyExpire      bool
+	loading                 bool
 	statRejectedConn        uint64 // 拒绝客户端连接的次数
 	statNumConnections      uint64 // 成功连接客户端的次数
 	statTotalReadsProcessed uint64 // 成功处理read的次数
+	statExpiredKeys         uint64 // 成功处理过期key的次数
 	tcpKeepalive            int
 	maxclients              int
 	protoMaxBulkLen         int64
@@ -199,16 +203,21 @@ type RedisServer struct {
 	maxMemoryPolicy         int
 	maxMemory               int64
 
-	lruClock uint32
-	hz       float32
+	lruClock  uint32
+	hz        int
+	cronLoops int
 
 	dbnum        int
 	db           []*redisDb
 	nextClientId uint64
 
-	unixtime   int64
-	ustime     int64 // 微秒
-	luaTimeout uint32
+	unixtime        int64 // 秒
+	ustime          int64 // 微秒
+	mstime          int64 // 毫秒
+	luaTimeout      uint32
+	luaCaller       bool
+	luaTimeStart    int64
+	fixedTimeExpire int64
 
 	clientsPendWrite   *adlist.List
 	readyKeys          *adlist.List
@@ -217,6 +226,9 @@ type RedisServer struct {
 	statNetOutputBytes int
 
 	rdbChildPid, aofChildPid, moduleChildPid int
+
+	delCommand *redisCommand
+	slaves     *adlist.List
 }
 
 const (
@@ -412,7 +424,7 @@ func initServerConfig() {
 	server.maxclients = 100
 	server.clientsPendWrite = adlist.Create()
 	server.readyKeys = adlist.Create()
-	server.hz = 0.5
+	server.hz = 10
 	server.clientMaxQueryBufLen = 1024 * 1024
 	server.dbnum = 16
 	server.protoMaxBulkLen = 1024 * 1024
@@ -430,8 +442,37 @@ func (server *RedisServer) Stop() {
 	server.el.AeDeleteEventLoop()
 }
 
-func (server *RedisServer) serverCron(el *ae.EventLoop, id uint64, clientData interface{}) int {
-	return 0
+// todo serverCron
+func (server *RedisServer) serverCron(el *ae.EventLoop, id int64, clientData interface{}) int {
+	//if server.watchDogPeriod > 0 {
+	//	watchdogScheduleSignal(server.watchDogPeriod)
+	//}
+
+	updateCachedTime(1)
+	//server.hz = server.config_hz
+	if runWithPeriod(100) { // metrics
+
+	}
+
+	server.lruClock = getLRUClock()
+	return 1000 / server.hz
+}
+
+func runWithPeriod(_ms_ int) bool {
+	return _ms_ <= 1000/server.hz || server.cronLoops%(_ms_/(1000/server.hz)) == 0
+}
+
+func updateCachedTime(updateDayLightInfo int) {
+	server.ustime = ustime()
+	server.mstime = server.ustime / 1000
+	server.unixtime = server.mstime / 1000
+
+	//if (update_daylight_info) {
+	//	struct tm tm;
+	//		time_t ut = server.unixtime;
+	//		localtime_r(&ut,&tm);
+	//		server.daylight_active = tm.tm_isdst;
+	//}
 }
 
 func (server *RedisServer) createSocketAcceptHandler(sfd *socketFds, accessHandle ae.FileProc) error {
@@ -488,9 +529,9 @@ func (server *RedisServer) connSocketClose(conn *Connection) {
 }
 
 var redisCommandTable = []redisCommand{
-	{"module", moduleCommand, -2,
-		"admin no-script",
-		0, nil, 0, 0, 0, 0, 0, 0},
+	//{"module", moduleCommand, -2,
+	//	"admin no-script",
+	//	0, nil, 0, 0, 0, 0, 0, 0},
 
 	{"get", getCommand, 2,
 		"read-only fast @string",
@@ -501,9 +542,9 @@ var redisCommandTable = []redisCommand{
 	{"set", setCommand, -3,
 		"write use-memory @string",
 		0, nil, 1, 1, 1, 0, 0, 0},
-	{"exec", execCommand, 1,
-		"no-script no-monitor no-slowlog ok-loading ok-stale @transaction",
-		0, nil, 0, 0, 0, 0, 0, 0},
+	//{"exec", execCommand, 1,
+	//	"no-script no-monitor no-slowlog ok-loading ok-stale @transaction",
+	//	0, nil, 0, 0, 0, 0, 0, 0},
 	{"del", delCommand, -2,
 		"write @keyspace",
 		0, nil, 1, -1, 1, 0, 0, 0},

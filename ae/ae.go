@@ -28,13 +28,16 @@ const (
 const (
 	OK  = 0
 	ERR = -1
+	DeletedEventId
+	NoMore
 )
 
 type BeforeSleepProc func(eventLoop *EventLoop)
 type EventLoop struct {
 	MaxFd           int // 多路复用io一次最多返回多少个事件的fd
 	SetSize         int
-	TimeEventNextId int64
+	TimeEventNextId uint64
+	LastTime        time.Time
 	Events          []fileEvent
 	Fired           []firedEvent
 	TimeEventHead   *timeEvent
@@ -58,11 +61,11 @@ type firedEvent struct {
 	Mask int
 }
 
-type TimeProc func(eventLoop *EventLoop, id uint64, clientData interface{}) int
+type TimeProc func(eventLoop *EventLoop, id int64, clientData interface{}) int
 type aeEventFinalizerProc func(eventLoop *EventLoop, clientData interface{})
 type timeEvent struct {
 	Id            int64
-	When          int64 // timestamp
+	WhenTimestamp int64 // timestamp
 	TimeProc      TimeProc
 	FinalizerProc aeEventFinalizerProc
 	ClientData    interface{}
@@ -106,8 +109,8 @@ func (el *EventLoop) CreateTimeEvent(milliseconds int64, proc TimeProc, clientDa
 	el.TimeEventNextId++
 
 	te := new(timeEvent)
-	te.Id = id
-	te.When = util.GetMonotonicUs() + milliseconds*1000
+	te.Id = int64(id)
+	te.WhenTimestamp = util.GetMillionSeconds() + milliseconds
 	te.TimeProc = proc
 	te.FinalizerProc = finalizerProc
 	te.ClientData = clientData
@@ -120,7 +123,7 @@ func (el *EventLoop) CreateTimeEvent(milliseconds int64, proc TimeProc, clientDa
 	}
 	el.TimeEventHead = te
 
-	return id
+	return te.Id
 }
 
 func (el *EventLoop) AeDeleteFileEvent(fd, mask int) {
@@ -207,32 +210,43 @@ func aeProcessEvent(el *EventLoop, flags int) (processed int) {
 	// 注意，只要我们处理时间事件以便于休眠到下一个时间事件触发，我们也应该要处理select() events，哪怕没有file events
 	// 要处理
 	if el.MaxFd != -1 || (flags&TimeEvents != 0 && flags&DontWait == 0) {
-		timeVal := &util.TimeVal{}
-		msUntilTimer := int64(-1)
+		tvp := &util.TimeVal{}
+		var shortest *timeEvent
 
 		if flags&TimeEvents != 0 && flags&DontWait == 0 {
-			msUntilTimer = msUntilEarliestTimer(el)
+			shortest = aeSearchNearestTimer(el)
 		}
 
-		if msUntilTimer > 0 {
-			timeVal.Duration = time.Millisecond * time.Duration(msUntilTimer)
-		} else {
-			if flags&DontWait != 0 {
-				//timeVal.Duration = time.Second * 0
+		if shortest != nil {
+			now := util.GetMillionSeconds()
+			ms := shortest.WhenTimestamp - now
+
+			if ms > 0 {
+				tvp.Sec = ms / 1000
+				tvp.Usec = ms % 1000 * 1000
 			} else {
-				timeVal = nil
+				tvp.Sec = 0
+				tvp.Usec = 0
+			}
+		} else {
+			if flags&DontWait > 0 {
+				tvp.Sec = 0
+				tvp.Usec = 0
+			} else {
+				tvp = nil // wait forever
 			}
 		}
 
 		if el.Flags&DontWait != 0 {
-			timeVal = &util.TimeVal{}
+			tvp.Sec = 0
+			tvp.Usec = 0
 		}
 
 		if el.BeforeSleep != nil && flags&CallBeforeSleep != 0 {
 			el.BeforeSleep(el)
 		}
 
-		numevents = el.aeApiPoll(timeVal)
+		numevents = el.aeApiPoll(tvp)
 
 		if el.AfterSleep != nil && flags&CallAfterSleep != 0 {
 			el.AfterSleep(el)
@@ -264,31 +278,80 @@ func aeProcessEvent(el *EventLoop, flags int) (processed int) {
 }
 
 func processTimeEvents(el *EventLoop) int {
-	return 0
+	var processed int
+	var te *timeEvent
+
+	now := time.Now()
+	if now.Before(el.LastTime) {
+		te = el.TimeEventHead
+		for te != nil {
+			te.WhenTimestamp = 0
+			te = te.Next
+		}
+	}
+	el.LastTime = now
+
+	te = el.TimeEventHead
+	maxId := el.TimeEventNextId - 1
+	for te != nil {
+		if te.Id == DeletedEventId {
+			next := te.Next
+			if te.RefCount > 0 {
+				te = next
+				continue
+			}
+			if te.Prev != nil {
+				te.Prev.Next = te.Next
+			} else {
+				el.TimeEventHead = te.Next
+			}
+
+			if te.Next != nil {
+				te.Next.Prev = te.Prev
+			}
+			if te.FinalizerProc != nil {
+				te.FinalizerProc(el, te.ClientData)
+			}
+			te = next
+			continue
+		}
+
+		if te.Id > int64(maxId) {
+			te = te.Next
+			continue
+		}
+
+		if now.UnixMilli() > te.WhenTimestamp {
+			id := te.Id
+			te.RefCount++
+			retVal := te.TimeProc(el, id, te.ClientData)
+			te.RefCount--
+			processed++
+			if retVal != NoMore {
+				te.WhenTimestamp = now.UnixMilli() + int64(retVal)
+			} else {
+				te.Id = DeletedEventId
+			}
+		}
+		te = te.Next
+	}
+	return processed
 }
 
-// msUntilEarliestTimer 返回距离第一个定时器被触发的时间还剩多少ms
+// aeSearchNearestTimer 返回距离第一个定时器被触发的时间还剩多少ms
 // 如果没有定时器，返回-1
 // 注意，time event 没有排序，获取的时间复杂度为O(N)
 // 可能的优化点(Redis 暂时还不需要，但是...):
 //  1.插入事件的时候就排序，这样最近的时间事件就是head，这样虽然会更好，但是插入和删除变成了O(N)
 // 	2.使用跳表，这样获取变成了O(1)并且插入是O(log(N))
-func msUntilEarliestTimer(el *EventLoop) int64 {
-	if el.TimeEventHead == nil {
-		return -1
-	}
-
-	earliest := el.TimeEventHead
+func aeSearchNearestTimer(el *EventLoop) *timeEvent {
 	te := el.TimeEventHead
+	var nearest *timeEvent
 	for te != nil {
-		if te.When < earliest.When {
-			earliest = te
+		if nearest == nil || te.WhenTimestamp < nearest.WhenTimestamp {
+			nearest = te
 		}
 		te = te.Next
 	}
-	now := util.GetMonotonicUs()
-	if now >= earliest.When {
-		return 0
-	}
-	return (earliest.When - now) / 1000
+	return nearest
 }

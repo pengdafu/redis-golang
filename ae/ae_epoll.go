@@ -38,7 +38,7 @@ func aeApiPoll(el *EventLoop, tvp *util.TimeVal) (numevents int) {
 		}
 		numevents = n
 	} else {
-		n, err := syscall.EpollWait(state.Epfd, state.Events, int(tvp.Duration.Milliseconds()))
+		n, err := syscall.EpollWait(state.Epfd, state.Events, tvp.MillionSeconds())
 		if err != nil {
 			return 0
 		}
