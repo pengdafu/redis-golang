@@ -11,12 +11,16 @@ import (
 	"github.com/pengdafu/redis-golang/util"
 	"log"
 	"os"
+	"runtime/debug"
 	"strings"
+	"syscall"
 	"time"
 	"unsafe"
 )
 
 const (
+	CONFIG_DEFAULT_HZ       = 10
+	CRON_DBS_PER_CALL       = 16
 	CONFIG_MIN_RESERVED_FDS = 32
 	CONFIG_FDSET_INCR       = CONFIG_MIN_RESERVED_FDS + 96
 	CONFIG_BINDADDR_MAX     = 16
@@ -185,23 +189,28 @@ type RedisServer struct {
 	bindAddr      [CONFIG_BINDADDR_MAX]string
 	bindAddrCount int
 
-	clients                 []*Client
-	currentClient           *Client
-	clusterEnabled          bool
-	lazyFreeLazyUserDel     bool
-	lazyFreeLazyExpire      bool
-	loading                 bool
-	statRejectedConn        uint64 // 拒绝客户端连接的次数
-	statNumConnections      uint64 // 成功连接客户端的次数
-	statTotalReadsProcessed uint64 // 成功处理read的次数
-	statExpiredKeys         uint64 // 成功处理过期key的次数
-	tcpKeepalive            int
-	maxclients              int
-	protoMaxBulkLen         int64
-	clientMaxQueryBufLen    int
-	dirty                   int
-	maxMemoryPolicy         int
-	maxMemory               int64
+	clients                        []*Client
+	currentClient                  *Client
+	clusterEnabled                 bool
+	lazyFreeLazyUserDel            bool
+	lazyFreeLazyExpire             bool
+	loading                        bool
+	activeExpireEnabled            bool
+	activeRehashing                bool
+	activeExpireEffort             int
+	statRejectedConn               uint64 // 拒绝客户端连接的次数
+	statNumConnections             uint64 // 成功连接客户端的次数
+	statTotalReadsProcessed        uint64 // 成功处理read的次数
+	statExpiredKeys                uint64 // 成功处理过期key的次数
+	statExpiredStalePerc           int    // 成功处理过期key的次数
+	statExpiredTimeCapReachedCount int
+	tcpKeepalive                   int
+	maxclients                     int
+	protoMaxBulkLen                int64
+	clientMaxQueryBufLen           int
+	dirty                          int
+	maxMemoryPolicy                int
+	maxMemory                      int64
 
 	lruClock  uint32
 	hz        int
@@ -426,8 +435,16 @@ func initServerConfig() {
 	server.readyKeys = adlist.Create()
 	server.hz = 10
 	server.clientMaxQueryBufLen = 1024 * 1024
-	server.dbnum = 16
+	server.dbnum = 1
 	server.protoMaxBulkLen = 1024 * 1024
+	server.activeExpireEnabled = true
+	server.activeRehashing = true
+
+	server.activeExpireEffort = 1
+
+	server.rdbChildPid = -1
+	server.moduleChildPid = -1
+	server.aofChildPid = -1
 
 	server.commands = dict.Create(commandTableDictType, nil)
 	server.origCommands = dict.Create(commandTableDictType, nil)
@@ -435,10 +452,20 @@ func initServerConfig() {
 }
 
 func (server *RedisServer) Start() {
+	defer func() {
+		if err := recover(); err != nil {
+			log.Println("recovery err: ", err)
+			debug.PrintStack()
+			server.Stop()
+		}
+	}()
 	server.el.AeMain()
 }
 
 func (server *RedisServer) Stop() {
+	for i := 0; i < server.ipfd.count; i++ {
+		syscall.Close(server.ipfd.fd[i])
+	}
 	server.el.AeDeleteEventLoop()
 }
 
@@ -454,8 +481,86 @@ func (server *RedisServer) serverCron(el *ae.EventLoop, id int64, clientData int
 
 	}
 
+	if runWithPeriod(5000) {
+		for j := 0; j < server.dbnum; j++ {
+			size := server.db[j].dict.Slots()
+			used := server.db[j].dict.Size()
+			vkeys := server.db[j].expires.Size()
+			log.Printf("DB %d: %d keys (%d volatile) in %d slots HT.\n", j, used, vkeys, size)
+		}
+	}
+
+	databaseCron()
+
 	server.lruClock = getLRUClock()
+	server.cronLoops++
 	return 1000 / server.hz
+}
+
+func databaseCron() {
+	if server.activeExpireEnabled {
+		if iAmMaster() {
+			activeExpireCycle(activeExpireCycleSlow)
+		} else {
+			expireSlaveKeys()
+		}
+	}
+
+	//activeDefragCycle()
+
+	if !hasActiveChildProcess() {
+		var resizeDb = 0
+		var rehashDb = 0
+		dbsPereCall := CRON_DBS_PER_CALL
+		if dbsPereCall > server.dbnum {
+			dbsPereCall = server.dbnum
+		}
+
+		for j := 0; j < dbsPereCall; j++ {
+			tryResizeHashTables(resizeDb % server.dbnum)
+			resizeDb++
+		}
+		if server.activeRehashing {
+			for j := 0; j < dbsPereCall; j++ {
+				if incrementallyRehash(rehashDb) {
+					break
+				} else {
+					rehashDb++
+					rehashDb %= server.dbnum
+				}
+			}
+		}
+	}
+}
+
+func tryResizeHashTables(dbId int) {
+	if htNeedResize(server.db[dbId].dict) {
+		server.db[dbId].dict.Resize()
+	}
+	if htNeedResize(server.db[dbId].expires) {
+		server.db[dbId].expires.Resize()
+	}
+}
+func incrementallyRehash(dbId int) bool {
+	if server.db[dbId].dict.IsRehashing() {
+		server.db[dbId].dict.RehashMilliseconds(1)
+		return true
+	}
+	if server.db[dbId].expires.IsRehashing() {
+		server.db[dbId].expires.RehashMilliseconds(1)
+		return true
+	}
+	return false
+}
+func htNeedResize(dt *dict.Dict) bool {
+	size := dt.Slots()
+	used := dt.Size()
+	return size > dict.HtInitialSize && used*100/size < 10
+}
+
+func iAmMaster() bool {
+	return (!server.clusterEnabled && server.masterhost == "") ||
+		(server.clusterEnabled && nodeIsMaster(nil))
 }
 
 func runWithPeriod(_ms_ int) bool {
@@ -1064,6 +1169,12 @@ func dictEncObjKeyCompare(privData interface{}, key1, key2 unsafe.Pointer) bool 
 
 func beforeSleep(eventLoop *ae.EventLoop) {
 	handleClientsWithPendingWrites()
+
+	if server.activeExpireEnabled && server.masterhost == "" {
+		activeExpireCycle(activeExpireCycleFast)
+	}
+
+	flushAppendOnlyFile(0)
 }
 
 func hasActiveChildProcess() bool {

@@ -26,12 +26,12 @@ func main() {
 	go func() {
 		// todo graceful start/stop
 		redisServer.Start()
-		redisServer.Stop()
 	}()
 
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	signals := make(chan os.Signal)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
 	<-signals
+	redisServer.Stop()
 }
 
 func checkOSSupport() {

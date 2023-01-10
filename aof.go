@@ -4,3 +4,7 @@ package main
 func feedAppendOnlyFile(cmd *redisCommand, dictId int, argv []*robj, argc int) {
 
 }
+
+func flushAppendOnlyFile(force int) {
+
+}

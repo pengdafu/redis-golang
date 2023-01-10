@@ -3,6 +3,7 @@ package dict
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/pengdafu/redis-golang/util"
 	"math"
 	"unsafe"
 )
@@ -10,9 +11,9 @@ import (
 var dictSeedKey []byte
 
 var (
-	dictCanResize        = false
+	dictCanResize        = true
 	dictForceResizeRatio = int64(5)
-	dictInitSize         = int64(4)
+	HtInitialSize        = int64(4)
 )
 
 type Dict struct {
@@ -48,7 +49,7 @@ func (dict *Dict) init(typ *Type, privData interface{}) {
 	dict.iterators = 0
 }
 func (dict *Dict) addRaw(key unsafe.Pointer, existing **Entry) *Entry {
-	if dict.isRehashing() {
+	if dict.IsRehashing() {
 		dict.rehashStep()
 	}
 
@@ -58,7 +59,7 @@ func (dict *Dict) addRaw(key unsafe.Pointer, existing **Entry) *Entry {
 	}
 
 	ht := &dict.ht[0]
-	if dict.isRehashing() {
+	if dict.IsRehashing() {
 		ht = &dict.ht[1]
 	}
 	entry := new(Entry)
@@ -78,12 +79,12 @@ func (dict *Dict) setKey(entry *Entry, key unsafe.Pointer) {
 	}
 }
 
-func (dict *Dict) isRehashing() bool {
+func (dict *Dict) IsRehashing() bool {
 	return dict.rehashIdx != -1
 }
 
 func (dict *Dict) expand(size int64) bool {
-	if dict.isRehashing() || dict.ht[0].used > size {
+	if dict.IsRehashing() || dict.ht[0].used > size {
 		return false
 	}
 	realSize := dict.nextPower(size)
@@ -109,7 +110,7 @@ func (dict *Dict) nextPower(size int64) int64 {
 	if size >= math.MaxInt64 {
 		return math.MaxInt64
 	}
-	i := dictInitSize
+	i := HtInitialSize
 	for {
 		if i >= size {
 			return i
@@ -119,12 +120,12 @@ func (dict *Dict) nextPower(size int64) int64 {
 }
 
 func (dict *Dict) expandIfNeeded() bool {
-	if dict.isRehashing() {
+	if dict.IsRehashing() {
 		return true
 	}
 
 	if dict.ht[0].size == 0 {
-		return dict.expand(dictInitSize)
+		return dict.expand(HtInitialSize)
 	}
 
 	if dict.ht[0].used >= dict.ht[0].size && (dictCanResize || dict.ht[0].used/dict.ht[0].size >= dictForceResizeRatio) {
@@ -154,7 +155,7 @@ func (dict *Dict) keyIndex(key unsafe.Pointer, hash uint64, existing **Entry) in
 			}
 			he = he.next
 		}
-		if !dict.isRehashing() {
+		if !dict.IsRehashing() {
 			break
 		}
 	}
@@ -175,10 +176,10 @@ func (dict *Dict) rehashStep() {
 	}
 }
 
-func (dict *Dict) rehash(n int) {
+func (dict *Dict) rehash(n int) bool {
 	emptyVisit := 10 * n
-	if !dict.isRehashing() {
-		return
+	if !dict.IsRehashing() {
+		return false
 	}
 
 	for ; n > 0 && dict.ht[0].used != 0; n-- {
@@ -186,7 +187,7 @@ func (dict *Dict) rehash(n int) {
 			dict.rehashIdx++
 			emptyVisit--
 			if emptyVisit == 0 {
-				return
+				return true
 			}
 		}
 		de := dict.ht[0].table[dict.rehashIdx]
@@ -208,10 +209,15 @@ func (dict *Dict) rehash(n int) {
 		dict.ht[1].reset()
 		dict.rehashIdx = -1
 	}
+	return true
 }
 
 func (dict *Dict) Size() int64 {
 	return dict.ht[0].used + dict.ht[1].used
+}
+
+func (dict *Dict) Slots() int64 {
+	return dict.ht[0].size + dict.ht[1].size
 }
 
 func SetHashFunctionSeed(seed []byte) {
@@ -338,7 +344,7 @@ func (dict *Dict) Find(key unsafe.Pointer) *Entry {
 	if dict.Size() == 0 {
 		return nil
 	}
-	if dict.isRehashing() {
+	if dict.IsRehashing() {
 		dict.rehashStep()
 	}
 
@@ -352,7 +358,7 @@ func (dict *Dict) Find(key unsafe.Pointer) *Entry {
 			}
 			he = he.next
 		}
-		if !dict.isRehashing() {
+		if !dict.IsRehashing() {
 			return nil
 		}
 	}
@@ -374,6 +380,9 @@ func SetSignedIntegerVal(entry *Entry, val int64) {
 func GetSignedIntegerVal(enter *Entry) int64 {
 	return enter.v.s64
 }
+func GetKey(e *Entry) unsafe.Pointer {
+	return e.key
+}
 
 func (dict *Dict) Delete(key unsafe.Pointer) bool {
 	return dict.GenericDelete(key, false) != nil
@@ -384,7 +393,7 @@ func (dict *Dict) GenericDelete(key unsafe.Pointer, nofree bool) *Entry {
 		return nil
 	}
 
-	if dict.isRehashing() {
+	if dict.IsRehashing() {
 		dict.rehashStep()
 	}
 
@@ -410,7 +419,7 @@ func (dict *Dict) GenericDelete(key unsafe.Pointer, nofree bool) *Entry {
 			prevHe = he
 			he = he.next
 		}
-		if !dict.isRehashing() {
+		if !dict.IsRehashing() {
 			break
 		}
 	}
@@ -424,4 +433,36 @@ func (dict *Dict) AddOrFind(key unsafe.Pointer) *Entry {
 		return entry
 	}
 	return existing
+}
+
+func (dict *Dict) Resize() bool {
+	if !dictCanResize || dict.IsRehashing() {
+		return false
+	}
+	minimal := dict.ht[0].used
+	if minimal < HtInitialSize {
+		minimal = HtInitialSize
+	}
+	return dict.expand(minimal)
+}
+
+func (dict *Dict) RehashMilliseconds(ms int) int {
+	start := util.GetMillionSeconds()
+
+	rehashes := 0
+	for dict.rehash(100) {
+		rehashes += 100
+		if (util.GetMillionSeconds() - start) > int64(ms) {
+			break
+		}
+	}
+	return rehashes
+}
+
+func (dict *Dict) SizeMask(table int) uint64 {
+	return dict.ht[table].sizeMask
+}
+
+func (dict *Dict) DictEntry(table int, idx uint64) *Entry {
+	return dict.ht[table].table[idx]
 }

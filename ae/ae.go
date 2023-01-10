@@ -3,9 +3,6 @@ package ae
 import (
 	"fmt"
 	"github.com/pengdafu/redis-golang/util"
-	"log"
-	"os"
-	"runtime/debug"
 	"time"
 )
 
@@ -181,13 +178,6 @@ func (el *EventLoop) AeSetBeforeSleepProc(beforeSleep BeforeSleepProc) {
 }
 
 func (el *EventLoop) AeMain() {
-	defer func() {
-		if err := recover(); err != nil {
-			log.Println("recovery err: ", err)
-			debug.PrintStack()
-			os.Exit(1)
-		}
-	}()
 	el.Stop = 0
 	for el.Stop == 0 {
 		aeProcessEvent(el, AllEvents|CallBeforeSleep|CallAfterSleep)

@@ -12,3 +12,7 @@ type Entry struct {
 	}
 	next *Entry
 }
+
+func (e *Entry) Next() *Entry {
+	return e.next
+}
