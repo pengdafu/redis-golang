@@ -161,3 +161,58 @@ func activeExpireCycleTryExpire(db *redisDb, de *dict.Entry, now int64) bool {
 	}
 	return false
 }
+
+func expireCommand(c *Client) {
+	expireGenericCommand(c, mstime(), unitSeconds)
+}
+
+func expireGenericCommand(c *Client, basetime int64, unit int) {
+	key := c.argv[1]
+	param := c.argv[2]
+
+	var when int64
+	if err := param.getLongLongFromObjectOrReply(c, &when, ""); err != C_OK {
+		return
+	}
+	if unit == unitSeconds {
+		when *= 1000
+	}
+	when += basetime
+	if c.db.lookupKeyWrite(key) == nil {
+		addReply(c, shared.czero)
+		return
+	}
+
+	if checkAlreadyExpired(when) {
+		var aux *robj
+		deleteFn := dbASyncDelete
+		if !server.lazyFreeLazyExpire {
+			deleteFn = dbSyncDelete
+		}
+		deleted := deleteFn(c.db, key)
+		if !deleted {
+			panic("delete err")
+		}
+
+		server.dirty++
+
+		aux = shared.del
+		if server.lazyFreeLazyExpire {
+			aux = shared.unlink
+		}
+		rewriteClientCommandVector(c, 2, aux, key)
+		signalModifiedKey(c, c.db, key)
+		notifyKeySpaceEvent(notifyGeneric, "del", key, c.db.id)
+		addReply(c, shared.cone)
+	} else {
+		c.db.setExpire(c, key, when)
+		addReply(c, shared.cone)
+		signalModifiedKey(c, c.db, key)
+		notifyKeySpaceEvent(notifyGeneric, "expire", key, c.db.id)
+		server.dirty++
+	}
+}
+
+func checkAlreadyExpired(when int64) bool {
+	return when <= mstime() && !server.loading && server.masterhost == ""
+}

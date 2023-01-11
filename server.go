@@ -656,6 +656,29 @@ var redisCommandTable = []redisCommand{
 	{"unlink", unlinkCommand, -2,
 		"write fast @keyspace",
 		0, nil, 1, -1, 1, 0, 0, 0},
+	{"hset", hsetCommand, -4,
+		"write use-memory fast @hash",
+		0, nil, 1, 1, 1, 0, 0, 0},
+	{"hget", hgetCommand, 3,
+		"read-only fast @hash",
+		0, nil, 1, 1, 1, 0, 0, 0},
+	{"hdel", hdelCommand, -3,
+		"write fast @hash",
+		0, nil, 1, 1, 1, 0, 0, 0},
+	{"hkeys", hkeysCommand, 2,
+		"read-only to-sort @hash",
+		0, nil, 1, 1, 1, 0, 0, 0},
+
+	{"hvals", hvalsCommand, 2,
+		"read-only to-sort @hash",
+		0, nil, 1, 1, 1, 0, 0, 0},
+
+	{"hgetall", hgetallCommand, 2,
+		"read-only random @hash",
+		0, nil, 1, 1, 1, 0, 0, 0},
+	{"expire", expireCommand, 3,
+		"write fast @keyspace",
+		0, nil, 1, 1, 1, 0, 0, 0},
 }
 
 func populateCommandTable() {
@@ -934,6 +957,13 @@ func flagTransaction(c *Client) {
 
 func lookupCommand(key unsafe.Pointer) *redisCommand {
 	return (*redisCommand)(server.commands.FetchValue(key))
+}
+func lookupCommandOrOriginal(key unsafe.Pointer) *redisCommand {
+	cmd := (*redisCommand)(server.commands.FetchValue(key))
+	if cmd == nil {
+		cmd = (*redisCommand)(server.origCommands.FetchValue(key))
+	}
+	return cmd
 }
 
 type shareObject struct {

@@ -1,5 +1,10 @@
 package main
 
+import (
+	"github.com/pengdafu/redis-golang/sds"
+	"log"
+)
+
 const (
 	notifyKeySpace = 1 << iota
 	notifyKeyEvent
@@ -19,5 +24,5 @@ const (
 
 // todo
 func notifyKeySpaceEvent(typ int, event string, key *robj, dbId int) {
-
+	log.Printf("type:%d, event: %s, key: %s, dbId: %d\n", typ, event, (*sds.SDS)(key.ptr).BufData(0), dbId)
 }

@@ -924,3 +924,28 @@ func writeToClient(c *Client, handlerInstalled int) error {
 	}
 	return C_OK
 }
+
+func rewriteClientCommandVector(c *Client, argc int, argv ...*robj) {
+	c.argv = argv
+	c.argc = argc
+	c.argvLenSum = 0
+	for j := 0; j < c.argc; j++ {
+		if c.argv[j] != nil {
+			c.argvLenSum += getStringObjectLen(c.argv[j])
+		}
+		c.cmd = lookupCommandOrOriginal(c.argv[0].ptr)
+	}
+	if c.cmd == nil {
+		panic("cmd nil")
+	}
+}
+
+func getStringObjectLen(o *robj) int {
+	if o.getType() != ObjString {
+		panic(fmt.Sprintf("expect objString(0), but %d", o.getType()))
+	}
+	if o.getEncoding() == ObjEncodingRaw || o.getEncoding() == ObjEncodingEmbStr {
+		return sds.Len(*(*sds.SDS)(o.ptr))
+	}
+	return 0
+}
