@@ -162,7 +162,7 @@ func (db *redisDb) genericSetKey(c *Client, key, val *robj, keepTtl, signal bool
 
 func (db *redisDb) dbOverwrite(key, val *robj) {
 	de := db.dict.Find(key.ptr)
-	old := (*robj)(db.dict.GetVal(de))
+	old := (*robj)(dict.GetVal(de))
 	if server.maxMemoryPolicy&MaxMemoryFlagLfu > 0 {
 		val.setLru(old.getLru())
 	}

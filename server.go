@@ -189,6 +189,9 @@ type RedisServer struct {
 	bindAddr      [CONFIG_BINDADDR_MAX]string
 	bindAddrCount int
 
+	hashMaxZipListValue   int // 超过64字节转ht
+	hashMaxZipListEntries int // 超过512个元素转ht
+
 	clients                        []*Client
 	currentClient                  *Client
 	clusterEnabled                 bool
@@ -440,6 +443,9 @@ func initServerConfig() {
 	server.activeExpireEnabled = true
 	server.activeRehashing = true
 
+	server.hashMaxZipListValue = 64
+	server.hashMaxZipListEntries = 512
+
 	server.activeExpireEffort = 1
 
 	server.rdbChildPid = -1
@@ -657,6 +663,9 @@ var redisCommandTable = []redisCommand{
 		"write fast @keyspace",
 		0, nil, 1, -1, 1, 0, 0, 0},
 	{"hset", hsetCommand, -4,
+		"write use-memory fast @hash",
+		0, nil, 1, 1, 1, 0, 0, 0},
+	{"hmset", hsetCommand, -4,
 		"write use-memory fast @hash",
 		0, nil, 1, 1, 1, 0, 0, 0},
 	{"hget", hgetCommand, 3,
@@ -1129,6 +1138,14 @@ var objectKeyPointValueDictType = &dict.Type{
 	KeyCompare:    dictEncObjKeyCompare,
 	KeyDestructor: dictObjectDestructor,
 	ValDestructor: nil,
+}
+var hashDictType = &dict.Type{
+	HashFunction:  dictSdsHash,
+	KeyDup:        nil,
+	ValDup:        nil,
+	KeyCompare:    dictSdsKeyCompare,
+	KeyDestructor: dictSdsDestructor,
+	ValDestructor: dictSdsDestructor,
 }
 
 func dictSdsCaseHash(key unsafe.Pointer) uint64 {

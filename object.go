@@ -80,7 +80,11 @@ func (robj *robj) makeObjectShared() *robj {
 	return robj
 }
 
-func createObject[T sds.SDS | int | int64](typ int, ptr T) *robj {
+type objPtrType interface {
+	sds.SDS | int | int64 | []byte
+}
+
+func createObject[T objPtrType](typ int, ptr T) *robj {
 	o := new(robj)
 	o.setType(typ)
 	o.setEncoding(ObjEncodingRaw)

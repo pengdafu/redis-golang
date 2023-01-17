@@ -212,12 +212,27 @@ func (dict *Dict) rehash(n int) bool {
 	return true
 }
 
-func (dict *Dict) Size() int64 {
-	return dict.ht[0].used + dict.ht[1].used
-}
+func (dict *Dict) fingerprint() int64 {
+	var hash int64
+	var integers [6]int64
+	integers[0] = int64(uintptr(unsafe.Pointer(&dict.ht[0].table)))
+	integers[1] = dict.ht[0].size
+	integers[2] = dict.ht[0].used
+	integers[3] = int64(uintptr(unsafe.Pointer(&dict.ht[1].table)))
+	integers[4] = dict.ht[1].size
+	integers[5] = dict.ht[1].used
 
-func (dict *Dict) Slots() int64 {
-	return dict.ht[0].size + dict.ht[1].size
+	for i := 0; i < 6; i++ {
+		hash += integers[i]
+		hash = ^hash + (hash << 21)
+		hash = hash ^ (hash >> 24)
+		hash = (hash + (hash << 3)) + (hash << 8)
+		hash = hash ^ (hash >> 14)
+		hash = (hash + (hash << 2)) + (hash << 4) // hash * 21
+		hash = hash ^ (hash >> 28)
+		hash = hash + (hash << 31)
+	}
+	return hash
 }
 
 func SetHashFunctionSeed(seed []byte) {
@@ -323,6 +338,22 @@ func siphash_nocase(key []byte, message []byte) uint64 {
 	return siphash(key, lowerMessage)
 }
 
+func SetSignedIntegerVal(entry *Entry, val int64) {
+	entry.v.s64 = val
+}
+func SetVal(entry *Entry, val unsafe.Pointer) {
+	entry.v.val = val
+}
+func GetSignedIntegerVal(enter *Entry) int64 {
+	return enter.v.s64
+}
+func GetKey(e *Entry) unsafe.Pointer {
+	return e.key
+}
+func GetVal(entry *Entry) unsafe.Pointer {
+	return entry.v.val
+}
+
 func (dict *Dict) Add(key, value unsafe.Pointer) bool {
 	entry := dict.addRaw(key, nil)
 	if entry == nil {
@@ -336,7 +367,7 @@ func (dict *Dict) Add(key, value unsafe.Pointer) bool {
 func (dict *Dict) FetchValue(key unsafe.Pointer) unsafe.Pointer {
 	he := dict.Find(key)
 	if he != nil {
-		return dict.GetVal(he)
+		return GetVal(he)
 	}
 	return nil
 }
@@ -370,18 +401,6 @@ func (dict *Dict) SetVal(entry *Entry, obj unsafe.Pointer) {
 	} else {
 		entry.v.val = obj
 	}
-}
-func (dict *Dict) GetVal(entry *Entry) unsafe.Pointer {
-	return entry.v.val
-}
-func SetSignedIntegerVal(entry *Entry, val int64) {
-	entry.v.s64 = val
-}
-func GetSignedIntegerVal(enter *Entry) int64 {
-	return enter.v.s64
-}
-func GetKey(e *Entry) unsafe.Pointer {
-	return e.key
 }
 
 func (dict *Dict) Delete(key unsafe.Pointer) bool {
@@ -465,4 +484,23 @@ func (dict *Dict) SizeMask(table int) uint64 {
 
 func (dict *Dict) DictEntry(table int, idx uint64) *Entry {
 	return dict.ht[table].table[idx]
+}
+
+func (dict *Dict) Size() int64 {
+	return dict.ht[0].used + dict.ht[1].used
+}
+
+func (dict *Dict) Slots() int64 {
+	return dict.ht[0].size + dict.ht[1].size
+}
+
+func (dict *Dict) GetIterator() *Iterator {
+	iter := new(Iterator)
+	iter.d = dict
+	iter.table = 0
+	iter.index = -1
+	iter.safe = false
+	iter.entry = nil
+	iter.nextEntry = nil
+	return iter
 }
