@@ -108,7 +108,7 @@ func hashTypeSet(o *robj, field, value sds.SDS, flags int) int {
 
 func hgetCommand(c *Client) {
 	var o *robj
-	if o = c.db.lookupKeyReadOrReply(c, c.argv[1], shared.null[c.resp]); o == nil || o.checkType(c, ObjHash) {
+	if o = lookupKeyReadOrReply(c, c.argv[1], shared.null[c.resp]); o == nil || o.checkType(c, ObjHash) {
 		return
 	}
 
@@ -129,19 +129,134 @@ func hmgetCommand(c *Client) {
 }
 
 func hdelCommand(c *Client) {
+	var o *robj
+	if o = lookupKeyWriteOrReply(c, c.argv[1], shared.czero); o == nil || o.checkType(c, ObjHash) {
+		return
+	}
 
+	var deleted int
+	var keyRemoved bool
+	for j := 2; j < c.argc; j++ {
+		if hashTypeDelete(o, *(*sds.SDS)(c.argv[j].ptr)) {
+			deleted++
+		}
+		if hashTypeLength(o) == 0 {
+			dbDelete(c.db, c.argv[1])
+			keyRemoved = true
+			break
+		}
+	}
+
+	if deleted > 0 {
+		signalModifiedKey(c, c.db, c.argv[1])
+		notifyKeySpaceEvent(notifyHash, "hdel", c.argv[1], c.db.id)
+		if keyRemoved {
+			notifyKeySpaceEvent(notifyGeneric, "del", c.argv[1], c.db.id)
+		}
+		server.dirty++
+	}
+	addReplyLongLong(c, deleted)
+}
+
+func hashTypeDelete(o *robj, field sds.SDS) bool {
+	var deleted bool
+	if o.getEncoding() == ObjEncodingZipList {
+		zl := *(*[]byte)(o.ptr)
+		fptr := ziplist.Index(zl, ziplist.Head)
+		if fptr != nil {
+			fptr = ziplist.Find(fptr, field.BufData(0), sds.Len(field), 1)
+			if fptr != nil {
+				zl = ziplist.Delete(zl, &fptr) // delete key
+				zl = ziplist.Delete(zl, &fptr) // delete value
+				o.ptr = unsafe.Pointer(&zl)
+				deleted = true
+			}
+		}
+	} else if o.getEncoding() == ObjEncodingHt {
+		d := (*dict.Dict)(o.ptr)
+		if d.Delete(unsafe.Pointer(&field)) {
+			deleted = true
+			if htNeedResize(d) {
+				d.Resize()
+			}
+		}
+	} else {
+		panic("Unknown hash encoding")
+	}
+	return deleted
 }
 
 func hgetallCommand(c *Client) {
-
+	genericHgetallCommand(c, objHashKey|objHashValue)
 }
 
 func hkeysCommand(c *Client) {
-
+	genericHgetallCommand(c, objHashKey)
 }
 
 func hvalsCommand(c *Client) {
+	genericHgetallCommand(c, objHashValue)
+}
 
+func addHashIteratorCursorToReply(c *Client, hi *hashTypeIterator, what int) {
+	if hi.encoding == ObjEncodingZipList {
+		var vstr []byte
+		var vlen int
+		var vll int64
+		hashTypeCurrentFromZiplist(hi, what, &vstr, &vlen, &vll)
+		if vstr != nil {
+			addReplyBulkBuffer(c, vstr, vlen)
+		} else {
+			addReplyBulkLongLong(c, vll)
+		}
+	} else if hi.encoding == ObjEncodingHt {
+		value := hashTypeCurrentFromHashTable(hi, what)
+		addReplyBulkBuffer(c, value.BufData(0), sds.Len(value))
+	} else {
+		panic("Unknown hash encoding")
+	}
+}
+
+func genericHgetallCommand(c *Client, flags int) {
+	var o *robj
+	var hi *hashTypeIterator
+
+	emptyResp := shared.emptyMap[c.resp]
+	if !(flags&objHashKey > 0 && flags&objHashValue > 0) {
+		emptyResp = shared.emptyArray
+	}
+	if o = lookupKeyReadOrReply(c, c.argv[1], emptyResp); o == nil || o.checkType(c, ObjHash) {
+		return
+	}
+
+	length := hashTypeLength(o)
+	if flags&objHashKey > 0 && flags&objHashValue > 0 {
+		addReplyMapLen(c, length)
+	} else {
+		addReplyArrayLen(c, length)
+	}
+
+	var count int
+	hi = hashTypeInitIterator(o)
+	for hashTypeNext(hi) != C_ERR {
+		if flags&objHashKey > 0 {
+			addHashIteratorCursorToReply(c, hi, objHashKey)
+			count++
+		}
+		if flags&objHashValue > 0 {
+			addHashIteratorCursorToReply(c, hi, objHashValue)
+			count++
+		}
+	}
+
+	hashTypeReleaseIterator(hi)
+
+	if flags&objHashKey > 0 && flags&objHashValue > 0 {
+		count /= 2
+	}
+	if count != length {
+		panic(fmt.Sprintf("genericHgetallCommand count != length(%d! = %d)", count, length))
+	}
 }
 
 func addHashFieldToReply(c *Client, o *robj, field sds.SDS) {

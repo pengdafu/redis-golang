@@ -217,13 +217,22 @@ func (db *redisDb) setExpire(c *Client, key *robj, when int64) {
 	//}
 }
 
-func (db *redisDb) lookupKeyReadOrReply(c *Client, key, reply *robj) *robj {
-	o := db.lookupKeyRead(key)
+func lookupKeyReadOrReply(c *Client, key, reply *robj) *robj {
+	o := c.db.lookupKeyRead(key)
 	if o == nil {
 		addReply(c, reply)
 	}
 	return o
 }
+
+func lookupKeyWriteOrReply(c *Client, key, reply *robj) *robj {
+	o := c.db.lookupKeyWrite(key)
+	if o == nil {
+		addReply(c, reply)
+	}
+	return o
+}
+
 func (db *redisDb) lookupKeyRead(key *robj) *robj {
 	return db.lookupKeyWriteWithFlags(key, lookupNone)
 }
@@ -239,4 +248,12 @@ func dbSyncDelete(db *redisDb, key *robj) bool {
 		return true
 	}
 	return false
+}
+
+func dbDelete(db *redisDb, key *robj) bool {
+	if server.lazyFreeLazyServerDel {
+		return dbASyncDelete(db, key)
+	} else {
+		return dbSyncDelete(db, key)
+	}
 }

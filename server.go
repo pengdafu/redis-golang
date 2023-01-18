@@ -197,6 +197,7 @@ type RedisServer struct {
 	clusterEnabled                 bool
 	lazyFreeLazyUserDel            bool
 	lazyFreeLazyExpire             bool
+	lazyFreeLazyServerDel          bool
 	loading                        bool
 	activeExpireEnabled            bool
 	activeRehashing                bool

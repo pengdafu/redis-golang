@@ -661,6 +661,19 @@ func addReplyAggregateLen(c *Client, length int, prefix byte) {
 	}
 }
 
+func addReplyMapLen(c *Client, length int) {
+	var prefix byte
+	if c.resp == 2 {
+		prefix = '*'
+	} else {
+		prefix = '%'
+	}
+	if c.resp == 2 {
+		length *= 2
+	}
+	addReplyAggregateLen(c, length, prefix)
+}
+
 func addReplyArrayLen(c *Client, length int) {
 	addReplyAggregateLen(c, length, '*')
 }
