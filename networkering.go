@@ -628,11 +628,43 @@ func addReply(c *Client, o *robj) {
 	}
 }
 
+func addReplyNull(c *Client) {
+	if c.resp == 2 {
+		addReplyProto(c, "$-1\r\n")
+	} else {
+		addReplyProto(c, "_\r\n")
+	}
+}
+
 func addReplyBulk(c *Client, o *robj) {
 	addReplyBulkLen(c, o)
 	addReply(c, o)
 	addReply(c, shared.crlf)
 }
+
+func addReplyBulkBuffer(c *Client, p []byte, _len int) {
+	addReplyLongLongWithPrefix(c, _len, '$')
+	addReplyProto(c, p[:_len])
+	addReply(c, shared.crlf)
+}
+
+func addReplyBulkLongLong(c *Client, vll int64) {
+	p := util.String2Bytes(fmt.Sprintf("%d", vll))
+	addReplyBulkBuffer(c, p, len(p))
+}
+
+func addReplyAggregateLen(c *Client, length int, prefix byte) {
+	if prefix == '*' && length < ObjSharedBulkHdrLen {
+		addReply(c, shared.mBulkHdr[length])
+	} else {
+		addReplyLongLongWithPrefix(c, length, prefix)
+	}
+}
+
+func addReplyArrayLen(c *Client, length int) {
+	addReplyAggregateLen(c, length, '*')
+}
+
 func addReplyBulkLen(c *Client, o *robj) {
 	slen := o.stringObjectLen()
 	if slen < ObjSharedBulkHdrLen {
@@ -707,7 +739,7 @@ func addReplyErrorLength(c *Client, err string) {
 	addReplyProto(c, "\r\n")
 }
 
-func addReplyProto(c *Client, s string) {
+func addReplyProto[T ByteArrOrString](c *Client, s T) {
 	if prepareClientToWrite(c) != C_OK {
 		return
 	}

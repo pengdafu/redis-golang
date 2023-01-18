@@ -283,3 +283,11 @@ func (o *robj) stringObjectLen() int {
 	}
 	return len(fmt.Sprintf("%v", *(*int)(o.ptr)))
 }
+
+func (o *robj) checkType(c *Client, typ int) bool {
+	if o.getType() != typ {
+		addReply(c, shared.wrongTypeErr)
+		return true
+	}
+	return false
+}

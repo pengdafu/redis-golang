@@ -107,7 +107,25 @@ func hashTypeSet(o *robj, field, value sds.SDS, flags int) int {
 }
 
 func hgetCommand(c *Client) {
+	var o *robj
+	if o = c.db.lookupKeyReadOrReply(c, c.argv[1], shared.null[c.resp]); o == nil || o.checkType(c, ObjHash) {
+		return
+	}
 
+	addHashFieldToReply(c, o, *(*sds.SDS)(c.argv[2].ptr))
+}
+
+func hmgetCommand(c *Client) {
+	o := c.db.lookupKeyRead(c.argv[1])
+	if o != nil && o.getType() != ObjHash {
+		addReply(c, shared.wrongTypeErr)
+		return
+	}
+
+	addReplyArrayLen(c, c.argc-2)
+	for i := 2; i < c.argc; i++ {
+		addHashFieldToReply(c, o, *(*sds.SDS)(c.argv[i].ptr))
+	}
 }
 
 func hdelCommand(c *Client) {
@@ -124,6 +142,67 @@ func hkeysCommand(c *Client) {
 
 func hvalsCommand(c *Client) {
 
+}
+
+func addHashFieldToReply(c *Client, o *robj, field sds.SDS) {
+	if o == nil {
+		addReplyNull(c)
+		return
+	}
+
+	if o.getEncoding() == ObjEncodingZipList {
+		var vstr []byte
+		var vlen int
+		var vll int64
+		if hashTypeGetFromZiplist(o, field, &vstr, &vlen, &vll) < 0 {
+			addReplyNull(c)
+		} else {
+			if vstr != nil {
+				addReplyBulkBuffer(c, vstr, vlen)
+			} else {
+				addReplyBulkLongLong(c, vll)
+			}
+		}
+	} else if o.getEncoding() == ObjEncodingHt {
+		value := hashTypeGetFromHashTable(o, field)
+		if value != nil {
+			addReplyBulkBuffer(c, value.BufData(0), sds.Len(*value))
+		} else {
+			addReplyNull(c)
+		}
+	} else {
+		panic("Unknown hash encoding")
+	}
+}
+
+func hashTypeGetFromHashTable(o *robj, field sds.SDS) *sds.SDS {
+	d := (*dict.Dict)(o.ptr)
+
+	de := d.Find(unsafe.Pointer(&field))
+	if de == nil {
+		return nil
+	}
+	return (*sds.SDS)(dict.GetVal(de))
+}
+
+func hashTypeGetFromZiplist(o *robj, field sds.SDS, vstr *[]byte, vlen *int, vll *int64) (ret int) {
+	zl := *(*[]byte)(o.ptr)
+	fptr := ziplist.Index(zl, ziplist.Head)
+	var vptr []byte
+	if fptr != nil {
+		fptr = ziplist.Find(fptr, field.BufData(0), sds.Len(field), 1)
+		if fptr != nil {
+			vptr = ziplist.Next(zl, fptr)
+		}
+	}
+
+	if vptr != nil {
+		if !ziplist.Get(vptr, vstr, vlen, vll) {
+			return -1
+		}
+		return 0
+	}
+	return -1
 }
 
 func hashTypeLookupWriteOrCreate(c *Client, key *robj) *robj {
