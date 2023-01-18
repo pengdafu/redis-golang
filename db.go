@@ -257,3 +257,23 @@ func dbDelete(db *redisDb, key *robj) bool {
 		return dbSyncDelete(db, key)
 	}
 }
+
+/* ------ */
+
+func selectCommand(c *Client) {
+	var id int64
+	if c.argv[1].getLongLongFromObjectOrReply(c, &id, "invalid DB index") != C_OK {
+		return
+	}
+
+	if server.clusterEnabled && id != 0 {
+		addReplyError(c, "SELECT is not allow in cluster mode")
+		return
+	}
+
+	if selectDb(c, int(id)) == C_ERR {
+		addReplyError(c, "DB index is out of range")
+		return
+	}
+	addReply(c, shared.ok)
+}

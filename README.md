@@ -1,1 +1,22 @@
-TODO: 使用golang写一遍redis的代码
+# Support Command
+
+## common
+- expire
+- del
+- unlink
+- select
+
+## string
+- set
+- get
+
+## hash
+- hset
+- hmset
+- hdel
+- hgetall
+- hkeys
+- hvals
+
+
+... todo

@@ -439,7 +439,7 @@ func initServerConfig() {
 	server.readyKeys = adlist.Create()
 	server.hz = 10
 	server.clientMaxQueryBufLen = 1024 * 1024
-	server.dbnum = 1
+	server.dbnum = 16
 	server.protoMaxBulkLen = 1024 * 1024
 	server.activeExpireEnabled = true
 	server.activeRehashing = true
@@ -493,7 +493,9 @@ func (server *RedisServer) serverCron(el *ae.EventLoop, id int64, clientData int
 			size := server.db[j].dict.Slots()
 			used := server.db[j].dict.Size()
 			vkeys := server.db[j].expires.Size()
-			log.Printf("DB %d: %d keys (%d volatile) in %d slots HT.\n", j, used, vkeys, size)
+			if size > 0 || used > 0 || vkeys > 0 {
+				log.Printf("DB %d: %d keys (%d volatile) in %d slots HT.\n", j, used, vkeys, size)
+			}
 		}
 	}
 
@@ -644,7 +646,9 @@ var redisCommandTable = []redisCommand{
 	//{"module", moduleCommand, -2,
 	//	"admin no-script",
 	//	0, nil, 0, 0, 0, 0, 0, 0},
-
+	{"select", selectCommand, 2,
+		"ok-loading fast ok-stale @keyspace",
+		0, nil, 0, 0, 0, 0, 0, 0},
 	{"get", getCommand, 2,
 		"read-only fast @string",
 		0, nil, 1, 1, 1, 0, 0, 0},
