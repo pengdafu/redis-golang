@@ -72,6 +72,10 @@ func String2Int64[T []byte | string](str T, v *int64) bool {
 		return false
 	}
 
+	if v == nil {
+		return true
+	}
+
 	*v = i
 	return true
 }

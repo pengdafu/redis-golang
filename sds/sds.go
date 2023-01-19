@@ -2,6 +2,7 @@ package sds
 
 import (
 	"encoding/binary"
+	"fmt"
 	"github.com/pengdafu/redis-golang/util"
 	"strings"
 	"unicode"
@@ -480,4 +481,8 @@ func RemoveFreeSpace(s SDS) SDS {
 
 func Dup(s SDS) SDS {
 	return NewLen(s.BufData(0))
+}
+
+func FromLongLong(value int64) SDS {
+	return NewLen(fmt.Sprintf("%d", value))
 }

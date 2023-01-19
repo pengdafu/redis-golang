@@ -191,6 +191,7 @@ type RedisServer struct {
 
 	hashMaxZipListValue   int // 超过64字节转ht
 	hashMaxZipListEntries int // 超过512个元素转ht
+	setMaxIntSetEntries   int // 超过512个元素转ht
 
 	clients                        []*Client
 	currentClient                  *Client
@@ -446,6 +447,7 @@ func initServerConfig() {
 
 	server.hashMaxZipListValue = 64
 	server.hashMaxZipListEntries = 512
+	server.setMaxIntSetEntries = 512
 
 	server.activeExpireEffort = 1
 
@@ -649,6 +651,9 @@ var redisCommandTable = []redisCommand{
 	{"select", selectCommand, 2,
 		"ok-loading fast ok-stale @keyspace",
 		0, nil, 0, 0, 0, 0, 0, 0},
+	{"expire", expireCommand, 3,
+		"write fast @keyspace",
+		0, nil, 1, 1, 1, 0, 0, 0},
 	{"get", getCommand, 2,
 		"read-only fast @string",
 		0, nil, 1, 1, 1, 0, 0, 0},
@@ -693,8 +698,22 @@ var redisCommandTable = []redisCommand{
 	{"hgetall", hgetallCommand, 2,
 		"read-only random @hash",
 		0, nil, 1, 1, 1, 0, 0, 0},
-	{"expire", expireCommand, 3,
-		"write fast @keyspace",
+	{"sadd", saddCommand, -3,
+		"write use-memory fast @set",
+		0, nil, 1, 1, 1, 0, 0, 0},
+
+	{"srem", sremCommand, -3,
+		"write fast @set",
+		0, nil, 1, 1, 1, 0, 0, 0},
+
+	{"scard", scardCommand, 2,
+		"read-only fast @set",
+		0, nil, 1, 1, 1, 0, 0, 0},
+	{"sinter", sinterCommand, -2,
+		"read-only to-sort @set",
+		0, nil, 1, -1, 1, 0, 0, 0},
+	{"smembers", sinterCommand, 2,
+		"read-only to-sort @set",
 		0, nil, 1, 1, 1, 0, 0, 0},
 }
 
@@ -1154,6 +1173,14 @@ var hashDictType = &dict.Type{
 	KeyCompare:    dictSdsKeyCompare,
 	KeyDestructor: dictSdsDestructor,
 	ValDestructor: dictSdsDestructor,
+}
+var setDictType = &dict.Type{
+	HashFunction:  dictSdsCaseHash,
+	KeyDup:        nil,
+	ValDup:        nil,
+	KeyCompare:    dictSdsKeyCaseCompare,
+	KeyDestructor: dictSdsDestructor,
+	ValDestructor: nil,
 }
 
 func dictSdsCaseHash(key unsafe.Pointer) uint64 {

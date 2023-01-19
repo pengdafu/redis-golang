@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"github.com/pengdafu/redis-golang/dict"
+	"github.com/pengdafu/redis-golang/intset"
 	"github.com/pengdafu/redis-golang/sds"
 	"github.com/pengdafu/redis-golang/util"
 	"math"
@@ -80,8 +82,12 @@ func (robj *robj) makeObjectShared() *robj {
 	return robj
 }
 
+func isSdsRepresentableAsLongLong(s sds.SDS, llval *int64) bool {
+	return util.String2Int64(s.BufData(0), llval)
+}
+
 type objPtrType interface {
-	sds.SDS | int | int64 | []byte
+	sds.SDS | int | int64 | []byte | intset.IntSet | dict.Dict
 }
 
 func createObject[T objPtrType](typ int, ptr T) *robj {
@@ -109,6 +115,20 @@ func createStringObject(ptr string) *robj {
 	} else {
 		return createRawStringObject(util.String2Bytes(ptr))
 	}
+}
+
+func createIntsetObject() *robj {
+	is := intset.New()
+	o := createObject(ObjSet, is)
+	o.setEncoding(ObjEncodingIntSet)
+	return o
+}
+
+func createSetObject() *robj {
+	dt := dict.Create(setDictType, nil)
+	o := createObject(ObjSet, *dt)
+	o.setEncoding(ObjEncodingHt)
+	return o
 }
 
 // 说明长度肯定小于等于44
