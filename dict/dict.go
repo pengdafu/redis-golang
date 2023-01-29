@@ -105,8 +105,8 @@ func (dict *Dict) keyIndex(key unsafe.Pointer, hash uint64, existing **Entry) in
 			if key == he.key || dict.compareKey(key, he.key) {
 				if existing != nil {
 					*existing = he
-					return -1
 				}
+				return -1
 			}
 			he = he.next
 		}
