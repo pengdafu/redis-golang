@@ -68,12 +68,18 @@ func (robj *robj) getLru() uint32 {
 	return robj.__ >> lruBitOffset
 }
 func (robj *robj) setType(typ int) {
+	mask := uint32(0xFFFFFFF0)
+	robj.__ &= mask
 	robj.__ |= uint32(typ & typeBitMask)
 }
 func (robj *robj) setEncoding(encoding uint32) {
-	robj.__ |= encoding << encodingBitOffset & encodingMask
+	mask := uint32(0xFFFFFF0F)
+	robj.__ &= mask
+	robj.__ |= (encoding << encodingBitOffset) & encodingMask
 }
 func (robj *robj) setLru(lru uint32) {
+	mask := uint32(0x000000FF)
+	robj.__ &= mask
 	robj.__ |= lru << lruBitOffset & lruBitMask
 }
 

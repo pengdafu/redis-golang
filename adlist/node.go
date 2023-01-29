@@ -13,6 +13,14 @@ func (n *ListNode) NodeValue() interface{} {
 	return n.value
 }
 
+func (n *ListNode) SetNodeValue(value interface{}) {
+	n.value = value
+}
+
+func (n *ListNode) Next() *ListNode {
+	return n.next
+}
+
 const (
 	alStartHead = 0
 	alStartTail = 1

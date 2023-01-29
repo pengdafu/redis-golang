@@ -214,3 +214,8 @@ func (is *IntSet) Remove(value int64, success *bool) *IntSet {
 	}
 	return is
 }
+
+func (is *IntSet) Find(value int64) bool {
+	valenc := _intsetValueEncoding(value)
+	return valenc <= is.encoding && is.search(value, nil)
+}

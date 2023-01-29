@@ -914,7 +914,7 @@ func writeToClient(c *Client, handlerInstalled int) error {
 			o := c.reply.First().NodeValue().(*clientReplyBlock)
 			objLen := o.used
 			if objLen == 0 {
-				c.replyBytes -= objLen
+				c.replyBytes -= cap(o.buf)
 				c.reply.DelNode(c.reply.First())
 				continue
 			}
@@ -925,7 +925,7 @@ func writeToClient(c *Client, handlerInstalled int) error {
 			c.sentLen += nwrite
 			totWriten += nwrite
 			if c.sentLen == objLen {
-				c.replyBytes -= len(o.buf)
+				c.replyBytes -= cap(o.buf)
 				c.reply.DelNode(c.reply.First())
 				c.sentLen = 0
 				if c.reply.Len() == 0 {
@@ -993,4 +993,88 @@ func getStringObjectLen(o *robj) int {
 		return sds.Len(*(*sds.SDS)(o.ptr))
 	}
 	return 0
+}
+
+func addReplyDeferredLen(c *Client) *adlist.ListNode {
+	if prepareClientToWrite(c) != C_OK {
+		return nil
+	}
+	trimReplyUnusedTailSpace(c)
+	c.reply.AddNodeTail(nil)
+	return c.reply.Last()
+}
+
+func trimReplyUnusedTailSpace(c *Client) {
+	ln := c.reply.Last()
+	var tail *clientReplyBlock
+	if ln != nil {
+		tail = ln.NodeValue().(*clientReplyBlock)
+	}
+
+	if tail == nil {
+		return
+	}
+
+	if len(tail.buf)-tail.used > len(tail.buf)/4 && tail.used < PROTO_REPLY_CHUNK_BYTES {
+		oldSize := tail.used
+		buf := make([]byte, tail.used)
+		copy(buf, tail.buf)
+		tail.buf = buf
+		c.replyBytes = c.replyBytes + tail.used - oldSize
+	}
+}
+
+func setDeferredSetLen(c *Client, node *adlist.ListNode, length int) {
+	prefix := byte('*')
+	if c.resp != 2 {
+		prefix = '~'
+	}
+	setDeferredAggregateLen(c, node, length, prefix)
+}
+
+func setDeferredAggregateLen(c *Client, node *adlist.ListNode, length int, prefix byte) {
+	var next *clientReplyBlock
+	lenStr := fmt.Sprintf("%c%d\r\n", prefix, length)
+
+	if node == nil {
+		return
+	}
+	var ok bool
+	if next, ok = node.Next().NodeValue().(*clientReplyBlock); ok &&
+		len(next.buf)-next.used >= len(lenStr) &&
+		next.used < PROTO_REPLY_CHUNK_BYTES*4 {
+		copy(next.buf[len(lenStr):], next.buf[:next.used])
+		copy(next.buf, lenStr)
+		next.used += len(lenStr)
+		c.reply.DelNode(node)
+	} else {
+		buf := new(clientReplyBlock)
+		buf.buf = make([]byte, len(lenStr))
+		buf.used = len(lenStr)
+		copy(buf.buf, lenStr)
+		node.SetNodeValue(buf)
+		c.replyBytes += cap(buf.buf)
+	}
+
+	asyncCloseClientOnOutputBufferLimitReached(c)
+}
+
+func asyncCloseClientOnOutputBufferLimitReached(c *Client) {
+	if c.conn == nil {
+		return
+	}
+
+	if c.replyBytes == 0 || c.flags&CLIENT_CLOSE_ASAP > 0 {
+		return
+	}
+
+	if checkClientOutputBufferLimits(c) {
+		freeClientAsync(c)
+		log.Printf("Client scheduled to be closed ASAP for overcoming of output buffer limits: %d", c.replyBytes)
+	}
+}
+
+// todo
+func checkClientOutputBufferLimits(c *Client) bool {
+	return false
 }

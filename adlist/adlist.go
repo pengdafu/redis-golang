@@ -74,7 +74,7 @@ func (l *List) DelNode(node *ListNode) {
 	}
 
 	if node.next != nil {
-		node.next.prev = node.next
+		node.next.prev = node.prev
 	} else {
 		l.tail = node.prev
 	}
